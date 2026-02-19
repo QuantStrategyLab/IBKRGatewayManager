@@ -1,0 +1,62 @@
+name: Deploy and Keep Active
+
+on:
+  push:
+    branches: [ main ]
+  # Runs automatically every day at 0:00 UTC (8:00 AM Beijing Time)
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Deploy and Log Setup
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.GCE_HOST }}
+          username: ${{ secrets.GCE_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd ~/ib-docker
+            sudo git fetch --all
+            sudo git reset --hard origin/main
+
+            # Write environment configurations
+            echo "TWS_USERID='${{ secrets.TWS_USERID }}'" > .env
+            echo "TWS_PASSWORD='${{ secrets.TWS_PASSWORD }}'" >> .env
+            echo "TOTP_SECRET='${{ secrets.TOTP_SECRET }}'" >> .env
+            echo "VNC_SERVER_PASSWORD='${{ secrets.VNC_SERVER_PASSWORD }}'" >> .env
+            echo "TRADING_MODE='${{ secrets.TRADING_MODE }}'" >> .env
+
+            # Restart containers
+            sudo docker compose down
+            sudo docker compose up -d
+            
+            # Wait for the container to stabilize
+            echo "Waiting for container to stabilize..."
+            sleep 15
+            
+            # Install dependencies with retry logic (to fix 'apt-get lock' issues)
+            echo "Installing dependencies inside container..."
+            sudo docker exec -u 0 ib-gateway bash -c "
+              for i in {1..5}; do
+                apt-get update && break || { echo 'Apt lock detected, retrying in 10s...'; sleep 10; }
+              done
+              apt-get install -y python3-pip xdotool && \
+              pip3 install pyotp --break-system-packages
+            "
+            
+            # --- Start Bot and ensure it runs as a daemon ---
+            # 1. Kill any existing bot processes to avoid conflicts
+            sudo docker exec ib-gateway pkill -f 2fa_bot.py || true
+            
+            # 2. Start the bot using nohup for background persistence
+            sudo docker exec -d ib-gateway bash -c "nohup python3 /home/ibgateway/2fa_bot.py > /home/ibgateway/2fa.log 2>&1 &"
+            
+            echo "✅ Deployment complete. Bot is monitoring the login window."
+            echo "Run 'docker exec ib-gateway tail -f /home/ibgateway/2fa.log' for real-time status."

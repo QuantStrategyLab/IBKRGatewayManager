@@ -1,0 +1,9 @@
+# Core IBKR API library for quantitative trading strategies
+ib_insync
+
+# Core library for the 2FA bot to calculate Google Authenticator codes
+pyotp
+
+# Common data analysis libraries (essential for quantitative trading)
+pandas
+numpy

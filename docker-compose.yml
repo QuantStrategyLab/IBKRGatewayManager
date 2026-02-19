@@ -1,0 +1,25 @@
+version: '3.4'
+services:
+  ib-gateway:
+    image: gnzsnz/ib-gateway:latest
+    container_name: ib-gateway
+    restart: always
+    environment:
+      # Read variables from the host's .env file
+      - TWS_USERID=${TWS_USERID}
+      - TWS_PASSWORD=${TWS_PASSWORD}
+      - TOTP_SECRET=${TOTP_SECRET}
+      - TRADING_MODE=${TRADING_MODE:-paper}
+      - VNC_SERVER_PASSWORD=${VNC_SERVER_PASSWORD}
+      - LOGIN_TIMEOUT=600
+      - ACCEPT_API_FROM_IP=0.0.0.0
+      - ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
+    volumes:
+      - ./2fa_bot.py:/home/ibgateway/2fa_bot.py
+    ports:
+      # API Port for Live Trading (Default: 4001)
+      - "127.0.0.1:4001:4001"
+      # API Port for Paper Trading (Default: 4002)
+      - "127.0.0.1:4002:4002"
+      # VNC Desktop Port for visual monitoring (Default: 5900)
+      - "127.0.0.1:5900:5900"
