@@ -38,24 +38,17 @@ jobs:
             echo "VNC_SERVER_PASSWORD='${{ secrets.VNC_SERVER_PASSWORD }}'" >> .env
             echo "TRADING_MODE='${{ secrets.TRADING_MODE }}'" >> .env
 
+            # Build image (cached after first build, fast on subsequent runs)
+            sudo docker compose build
+
             # Restart containers
             sudo docker compose down
             sudo docker compose up -d
-            
+
             # Wait for the container to stabilize
             echo "Waiting for container to stabilize..."
-            sleep 15
-            
-            # Install dependencies with retry logic (to fix 'apt-get lock' issues)
-            echo "Installing dependencies inside container..."
-            sudo docker exec -u 0 ib-gateway bash -c "
-              for i in {1..5}; do
-                apt-get update && break || { echo 'Apt lock detected, retrying in 10s...'; sleep 10; }
-              done
-              apt-get install -y python3-pip xdotool && \
-              pip3 install pyotp --break-system-packages
-            "
-            
+            sleep 30
+
             # --- Start Bot and ensure it runs as a daemon ---
             # 1. Kill any existing bot processes to avoid conflicts
             sudo docker exec ib-gateway pkill -f 2fa_bot.py || true

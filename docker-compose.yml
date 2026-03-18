@@ -1,7 +1,7 @@
 version: '3.4'
 services:
   ib-gateway:
-    image: gnzsnz/ib-gateway:latest
+    build: .
     container_name: ib-gateway
     restart: always
     environment:
