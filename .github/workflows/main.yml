@@ -27,7 +27,7 @@ jobs:
           zone: us-east1-c
           ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
           command: |
-            cd /home/zwlddx0815/ib-docker
+            cd ${{ secrets.DEPLOY_PATH || '/home/zwlddx0815/ib-docker' }}
             sudo git fetch --all
             sudo git reset --hard origin/main
 

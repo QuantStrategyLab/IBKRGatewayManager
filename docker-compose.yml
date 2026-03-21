@@ -12,8 +12,8 @@ services:
       - TRADING_MODE=${TRADING_MODE:-paper}
       - VNC_SERVER_PASSWORD=${VNC_SERVER_PASSWORD}
       - LOGIN_TIMEOUT=600
-      - ACCEPT_API_FROM_IP=0.0.0.0
-      - ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
+      - ACCEPT_API_FROM_IP=127.0.0.1
+      - ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=yes
     volumes:
       - ./2fa_bot.py:/home/ibgateway/2fa_bot.py
     ports:
