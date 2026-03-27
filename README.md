@@ -2,7 +2,7 @@
 
 An automated deployment solution for IBKR Gateway on Google Compute Engine (GCE), with automated 2FA and daily reconnect.
 
-> ✅ Current target architecture: **Cloud Run → Serverless VPC Access → GCE private IP:4001**.
+> ✅ Current target architecture: **Cloud Run → VPC private IP → GCE host port 4001/4002**.
 
 ## Features
 
@@ -31,9 +31,10 @@ Docker: ib-gateway container (port 4001)
 
 For this architecture to work:
 
-1. `ib-gateway` must listen for remote API clients (not localhost-only).
-2. Host port `4001` must be published on the VM.
-3. VPC firewall must allow source = Cloud Run/VPC connector CIDR to destination VM TCP `4001`.
+1. The base image must expose remote API access through host ports `4001`/`4002`.
+2. Host ports `4001` and `4002` must be published on the VM.
+3. VPC firewall must allow source = Cloud Run/VPC connector CIDR to destination VM TCP `4001` or `4002`.
+4. `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no` must be set so the image enables remote access relay.
 
 ---
 
@@ -77,10 +78,10 @@ sudo bash ./scripts/install_2fa_bot_watcher.sh
 
 ```bash
 docker compose ps
-ss -lntp | grep 4001
+ss -lntp | grep -E '4001|4002'
 ```
 
-Expected: host is listening on `0.0.0.0:4001` (or VM private interface) and container is healthy.
+Expected: host is listening on `0.0.0.0:4001` and/or `0.0.0.0:4002` (or VM private interface) and container is healthy.
 
 ---
 
@@ -88,8 +89,8 @@ Expected: host is listening on `0.0.0.0:4001` (or VM private interface) and cont
 
 1. Cloud Run service uses **Serverless VPC Access connector**.
 2. Cloud Run egress is configured correctly (`all-traffic` or `private-ranges-only`, depending on your route design).
-3. Firewall rule allows connector CIDR (or Cloud Run egress range) to VM TCP `4001`.
-4. Application uses `GCE_PRIVATE_IP:4001` as IBKR endpoint.
+3. Firewall rule allows connector CIDR (or Cloud Run egress range) to VM TCP `4001` for `live` or `4002` for `paper`.
+4. Application uses `GCE_PRIVATE_IP:4001` for `live` or `GCE_PRIVATE_IP:4002` for `paper`.
 
 ---
 
@@ -148,7 +149,7 @@ systemctl status ibkr-2fa-bot.timer --no-pager
 ### Check API Port in Container
 
 ```bash
-docker exec ib-gateway ss -lntp | grep 4001
+docker exec ib-gateway sh -lc 'command -v ss >/dev/null && ss -lntp | grep -E "4003|4004" || netstat -lntp | grep -E "4003|4004"'
 ```
 
 ---
@@ -163,11 +164,12 @@ docker exec ib-gateway ss -lntp | grep 4001
 
 ## Troubleshooting
 
-### Cloud Run cannot connect to `GCE_PRIVATE_IP:4001`
+### Cloud Run cannot connect to `GCE_PRIVATE_IP:4001` or `GCE_PRIVATE_IP:4002`
 
-- Confirm VM firewall rule exists for source connector CIDR -> TCP 4001.
-- Confirm `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no`.
-- Confirm Docker published port is `4001:4001`.
+- Confirm VM firewall rule exists for source connector CIDR -> TCP 4001 (`live`) or TCP 4002 (`paper`).
+- Confirm `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no`. This is equivalent to disabling the IB Gateway GUI option that only accepts localhost API clients.
+- Confirm Docker published ports are `4001:4003` and `4002:4004`.
+- Confirm the application uses `4001` for `live` and `4002` for `paper`.
 - Confirm service and connector are in compatible region/network routing setup.
 
 ### 2FA bot not filling code

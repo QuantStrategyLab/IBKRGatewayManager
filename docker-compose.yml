@@ -20,13 +20,10 @@ services:
     volumes:
       - ./2fa_bot.py:/home/ibgateway/2fa_bot.py
     ports:
-      # API Port for Live Trading (IBKR default: 4001)
-      # Bound on all host interfaces so Cloud Run can reach GCE private IP:4001 through VPC.
-      - "4001:4001"
-
-      # Optional Paper Trading API Port (IBKR default: 4002)
-      # Keep closed unless needed by your strategy.
-      - "4002:4002"
+      # The base image exposes remote API access through socat on container
+      # ports 4003/4004 while keeping IB Gateway itself localhost-only.
+      - "4001:4003"
+      - "4002:4004"
 
       # VNC Desktop Port for visual monitoring (Default: 5900)
       # Strongly recommended to keep blocked by firewall or tunnel only.
