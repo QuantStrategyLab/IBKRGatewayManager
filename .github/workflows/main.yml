@@ -12,10 +12,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      GCE_USER: ${{ secrets.GCE_USER || 'zwlddx0815' }}
-      GCE_INSTANCE_NAME: ${{ secrets.GCE_INSTANCE_NAME || 'interactive-brokers-quant-instance' }}
-      GCE_ZONE: ${{ secrets.GCE_ZONE || 'us-east1-c' }}
-      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/home/zwlddx0815/ib-docker' }}
+      GCE_USER: ${{ secrets.GCE_USER }}
+      GCE_INSTANCE_NAME: ${{ secrets.GCE_INSTANCE_NAME }}
+      GCE_ZONE: ${{ secrets.GCE_ZONE }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -40,10 +40,32 @@ jobs:
           TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
           VNC_SERVER_PASSWORD: ${{ secrets.VNC_SERVER_PASSWORD }}
           TRADING_MODE: ${{ secrets.TRADING_MODE }}
-          ACCEPT_API_FROM_IP: ${{ secrets.ACCEPT_API_FROM_IP || '10.8.0.0/28' }}
-          ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY: ${{ secrets.ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY || 'no' }}
+          ACCEPT_API_FROM_IP: ${{ secrets.ACCEPT_API_FROM_IP }}
+          ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY: ${{ secrets.ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY }}
         run: |
           set -euo pipefail
+
+          required_vars=(
+            GCE_USER
+            GCE_INSTANCE_NAME
+            GCE_ZONE
+            DEPLOY_PATH
+            SSH_PRIVATE_KEY
+            TWS_USERID
+            TWS_PASSWORD
+            TOTP_SECRET
+            VNC_SERVER_PASSWORD
+            TRADING_MODE
+            ACCEPT_API_FROM_IP
+            ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY
+          )
+
+          for var_name in "${required_vars[@]}"; do
+            if [ -z "${!var_name:-}" ]; then
+              echo "${var_name} is required. Set it in GitHub Actions secrets before running this workflow." >&2
+              exit 1
+            fi
+          done
 
           install -d -m 700 "$RUNNER_TEMP/ssh"
           SSH_KEY_FILE="$RUNNER_TEMP/ssh/google_compute_engine"

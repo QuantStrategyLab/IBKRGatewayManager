@@ -109,17 +109,19 @@ When recreating your VM, use this order:
 | :--- | :--- |
 | `GCP_SA_KEY` | GCP service account JSON key |
 | `SSH_PRIVATE_KEY` | SSH private key for VM login |
-| `GCE_USER` | VM SSH username (optional, default `zwlddx0815`) |
-| `GCE_INSTANCE_NAME` | VM instance name (optional, default exists in workflow) |
-| `GCE_ZONE` | VM zone (optional, default exists in workflow) |
-| `DEPLOY_PATH` | Repo path on VM (optional, default exists in workflow) |
+| `GCE_USER` | VM SSH username (for example `zwlddx0815`) |
+| `GCE_INSTANCE_NAME` | VM instance name |
+| `GCE_ZONE` | VM zone |
+| `DEPLOY_PATH` | Repo path on VM (for example `/home/zwlddx0815/ib-docker`) |
 | `TWS_USERID` | IBKR username |
 | `TWS_PASSWORD` | IBKR password |
 | `TOTP_SECRET` | IBKR TOTP secret |
 | `VNC_SERVER_PASSWORD` | VNC password |
 | `TRADING_MODE` | `paper` or `live` |
-| `ACCEPT_API_FROM_IP` | Cloud Run / VPC connector CIDR (example `10.8.0.0/28`) |
+| `ACCEPT_API_FROM_IP` | Cloud Run Direct VPC egress or connector CIDR (example `10.8.0.0/26`) |
 | `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY` | Set to `no` for Cloud Run private IP access |
+
+All secrets above are required. The workflow no longer falls back to built-in defaults, so a missing secret will fail fast instead of deploying to the wrong VM, zone, or path.
 
 ---
 
