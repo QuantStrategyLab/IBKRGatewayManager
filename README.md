@@ -109,6 +109,7 @@ When recreating your VM, use this order:
 | :--- | :--- |
 | `GCP_SA_KEY` | GCP service account JSON key |
 | `SSH_PRIVATE_KEY` | SSH private key for VM login |
+| `GCE_USER` | VM SSH username (optional, default `zwlddx0815`) |
 | `GCE_INSTANCE_NAME` | VM instance name (optional, default exists in workflow) |
 | `GCE_ZONE` | VM zone (optional, default exists in workflow) |
 | `DEPLOY_PATH` | Repo path on VM (optional, default exists in workflow) |
