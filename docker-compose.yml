@@ -12,14 +12,22 @@ services:
       - TRADING_MODE=${TRADING_MODE:-paper}
       - VNC_SERVER_PASSWORD=${VNC_SERVER_PASSWORD}
       - LOGIN_TIMEOUT=600
-      - ACCEPT_API_FROM_IP=127.0.0.1
-      - ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=yes
+
+      # Cloud Run -> VPC -> GCE private IP access
+      # IMPORTANT: restrict to your Serverless VPC Access connector CIDR or Cloud Run egress CIDR.
+      - ACCEPT_API_FROM_IP=${ACCEPT_API_FROM_IP:-10.8.0.0/28}
+      - ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=${ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY:-no}
     volumes:
       - ./2fa_bot.py:/home/ibgateway/2fa_bot.py
     ports:
-      # API Port for Live Trading (Default: 4001)
-      - "127.0.0.1:4001:4001"
-      # API Port for Paper Trading (Default: 4002)
-      - "127.0.0.1:4002:4002"
+      # API Port for Live Trading (IBKR default: 4001)
+      # Bound on all host interfaces so Cloud Run can reach GCE private IP:4001 through VPC.
+      - "4001:4001"
+
+      # Optional Paper Trading API Port (IBKR default: 4002)
+      # Keep closed unless needed by your strategy.
+      - "4002:4002"
+
       # VNC Desktop Port for visual monitoring (Default: 5900)
+      # Strongly recommended to keep blocked by firewall or tunnel only.
       - "127.0.0.1:5900:5900"
