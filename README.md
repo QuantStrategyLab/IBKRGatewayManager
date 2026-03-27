@@ -1,26 +1,39 @@
 # IBKR Gateway Manager
 
-An automated deployment solution for IBKR Gateway on Google Compute Engine (GCE). Solves two major pain points for cloud-based quant trading: **automated 2FA login** and **daily auto-reconnect**.
+An automated deployment solution for IBKR Gateway on Google Compute Engine (GCE), with automated 2FA and daily reconnect.
+
+> ✅ Current target architecture: **Cloud Run → Serverless VPC Access → GCE private IP:4001**.
 
 ## Features
 
-- **Containerized Deployment**: Docker-based setup, one-click spin-up.
-- **Automated 2FA**: Python bot using `pyotp` + `xdotool` auto-fills the 6-digit TOTP code.
-- **GCP-Native CI/CD**: Deploys via GitHub Actions using IAP tunnel — no IP whitelisting needed, survives VM IP changes.
-- **Daily Auto-Reconnect**: Restarts every day at 00:00 UTC (08:00 Beijing Time) to keep the session fresh.
-- **Secure Credential Management**: All secrets managed via GitHub Secrets, nothing hardcoded.
+- **Containerized Deployment**: Docker-based setup.
+- **Automated 2FA**: Python bot (`pyotp` + `xdotool`) auto-fills TOTP.
+- **Daily Auto-Reconnect**: restart policy for long-running reliability.
+- **Private Network API Access**: IBKR API exposed on GCE private network for Cloud Run.
 
-## Project Structure
+---
 
+## Architecture (Updated)
+
+```text
+Cloud Run service
+   │
+   ├─(egress: all-traffic/private-ranges-only)
+   ▼
+Serverless VPC Access Connector
+   ▼
+VPC (same region/network)
+   ▼
+GCE VM (private IP)
+   ▼
+Docker: ib-gateway container (port 4001)
 ```
-.
-├── .github/workflows/
-│   └── main.yml          # GitHub Actions CI/CD workflow
-├── 2fa_bot.py            # 2FA auto-fill bot
-├── Dockerfile            # Extends base image with pre-installed dependencies
-├── docker-compose.yml    # Container orchestration
-└── requirements.txt      # Python dependencies
-```
+
+For this architecture to work:
+
+1. `ib-gateway` must listen for remote API clients (not localhost-only).
+2. Host port `4001` must be published on the VM.
+3. VPC firewall must allow source = Cloud Run/VPC connector CIDR to destination VM TCP `4001`.
 
 ---
 
@@ -28,118 +41,129 @@ An automated deployment solution for IBKR Gateway on Google Compute Engine (GCE)
 
 ### 1. Prerequisites
 
-- A **Google Compute Engine** VM running Linux with Docker and Docker Compose installed.
-- The project cloned to `/home/<your_username>/ib-docker` on the VM.
-- An Interactive Brokers account with **TOTP (Google Authenticator)** 2FA enabled.
+- A Linux GCE VM with Docker + Docker Compose.
+- IBKR account with TOTP 2FA enabled.
+- Cloud Run service and GCE VM attached to reachable VPC network path.
 
-### 2. GCP Setup
+### 2. Configure `.env`
 
-**Create a Service Account** (IAM & Admin → Service Accounts → Create):
-- Grant the following roles:
-  - `Compute OS Admin Login`
-  - `Service Account User`
-  - `IAP-secured Tunnel User`
-  - `Compute Instance Admin (v1)`
-- Generate a **JSON key** and download it.
+Create `.env` beside `docker-compose.yml`:
 
-**Add IAP Firewall Rule** (VPC Network → Firewall → Create):
-- Direction: Ingress
-- Source IPv4: `35.235.240.0/20`
-- Protocol/Port: TCP `22`
-- Target: All instances (or your VM's network tag)
-
-**Generate an SSH Key Pair** on your VM:
 ```bash
-ssh-keygen -t rsa -b 4096 -m PEM -f ~/.ssh/github_actions_rsa -N ""
-cat ~/.ssh/github_actions_rsa.pub >> ~/.ssh/authorized_keys
+TWS_USERID=your_ibkr_username
+TWS_PASSWORD=your_ibkr_password
+TOTP_SECRET=your_base32_totp_secret
+VNC_SERVER_PASSWORD=your_vnc_password
+TRADING_MODE=live
+
+# Recommended: use the exact CIDR used by your Serverless VPC Access connector
+# Example: 10.8.0.0/28
+ACCEPT_API_FROM_IP=10.8.0.0/28
+
+# Must be 'no' for Cloud Run private IP access
+ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
 ```
 
-### 3. Configure GitHub Secrets
+### 3. Start IBKR Gateway
 
-Go to **Settings → Secrets and variables → Actions** and add:
+```bash
+docker compose up -d --build
+```
 
-| Secret | Description |
+> If you use this repository's GitHub Actions workflow, pushing to `main` also triggers automatic deployment to GCE.
+
+### 4. Verify on GCE VM
+
+```bash
+docker compose ps
+ss -lntp | grep 4001
+```
+
+Expected: host is listening on `0.0.0.0:4001` (or VM private interface) and container is healthy.
+
+---
+
+## Cloud Run Connectivity Checklist
+
+1. Cloud Run service uses **Serverless VPC Access connector**.
+2. Cloud Run egress is configured correctly (`all-traffic` or `private-ranges-only`, depending on your route design).
+3. Firewall rule allows connector CIDR (or Cloud Run egress range) to VM TCP `4001`.
+4. Application uses `GCE_PRIVATE_IP:4001` as IBKR endpoint.
+
+---
+
+## Recreate GCE and Deploy (Recommended Flow)
+
+When recreating your VM, use this order:
+
+1. **Create GCE VM** (Ubuntu recommended) in the same VPC/region path reachable from Cloud Run.
+2. **Install Docker + Docker Compose plugin** on the VM.
+3. **Clone this repo** to your target path (for example `/home/<user>/ib-docker`).
+4. **Set GitHub Secrets** so Action can redeploy automatically.
+5. **Push to `main`** to trigger deployment workflow.
+
+### Required GitHub Secrets for Auto Deploy
+
+| Secret | Purpose |
 | :--- | :--- |
-| `GCP_SA_KEY` | Full contents of the service account JSON key file |
-| `SSH_PRIVATE_KEY` | Contents of `~/.ssh/github_actions_rsa` (RSA PEM format) |
-| `TWS_USERID` | IBKR account username |
-| `TWS_PASSWORD` | IBKR account password |
-| `TOTP_SECRET` | Base32 TOTP secret key (from Google Authenticator setup) |
-| `VNC_SERVER_PASSWORD` | Password for VNC desktop access |
-| `TRADING_MODE` | `paper` for paper trading, `live` for live trading |
-
-### 4. Update Deployment Path
-
-In [`.github/workflows/main.yml`](.github/workflows/main.yml), update the path to match your VM username:
-```yaml
-cd /home/<your_username>/ib-docker
-```
-
-### 5. Deploy
-
-Push to the `main` branch. GitHub Actions will:
-1. Authenticate to GCP via the service account.
-2. Connect to the VM via IAP tunnel (no public IP needed).
-3. Pull the latest code, write the `.env` file, and rebuild the Docker image.
-4. Restart the container and launch the 2FA bot as a daemon.
-
-The workflow also runs automatically every day at **00:00 UTC (08:00 Beijing Time)**.
+| `GCP_SA_KEY` | GCP service account JSON key |
+| `SSH_PRIVATE_KEY` | SSH private key for VM login |
+| `GCE_INSTANCE_NAME` | VM instance name (optional, default exists in workflow) |
+| `GCE_ZONE` | VM zone (optional, default exists in workflow) |
+| `DEPLOY_PATH` | Repo path on VM (optional, default exists in workflow) |
+| `TWS_USERID` | IBKR username |
+| `TWS_PASSWORD` | IBKR password |
+| `TOTP_SECRET` | IBKR TOTP secret |
+| `VNC_SERVER_PASSWORD` | VNC password |
+| `TRADING_MODE` | `paper` or `live` |
+| `ACCEPT_API_FROM_IP` | Cloud Run / VPC connector CIDR (example `10.8.0.0/28`) |
+| `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY` | Set to `no` for Cloud Run private IP access |
 
 ---
 
 ## Operational Commands
 
-Run these on your VM via SSH.
-
 ### View 2FA Bot Logs
+
 ```bash
 docker exec ib-gateway tail -f /home/ibgateway/2fa.log
 ```
 
-### Check Bot Status
+### Check Bot Process
+
 ```bash
 docker exec ib-gateway pgrep -f 2fa_bot.py
 ```
 
-### Access Gateway UI via VNC
+### Check API Port in Container
 
-VNC is bound to localhost for security. Use an SSH tunnel to connect:
 ```bash
-ssh -L 5900:localhost:5900 <your_username>@<vm_external_ip>
-```
-Then open a VNC client and connect to `localhost:5900`.
-
-On macOS, you can use Finder → Go → Connect to Server:
-```
-vnc://localhost:5900
+docker exec ib-gateway ss -lntp | grep 4001
 ```
 
-### Connect via API
+---
 
-| Trading Mode | Port |
-| :--- | :--- |
-| Paper Trading | `4002` |
-| Live Trading | `4001` |
+## Security Notes
 
-API ports are also bound to `127.0.0.1`. Use an SSH tunnel the same way as VNC.
+- Do **not** set `ACCEPT_API_FROM_IP=0.0.0.0/0` in production.
+- Restrict firewall source to only your Cloud Run/VPC connector CIDR.
+- Keep VNC (`5900`) localhost-bound or tunnel-only.
 
 ---
 
 ## Troubleshooting
 
-**Workflow fails with `dial tcp: i/o timeout`**
-- Verify the IAP firewall rule (`35.235.240.0/20`, TCP 22) exists.
-- Verify the service account has all four required roles.
+### Cloud Run cannot connect to `GCE_PRIVATE_IP:4001`
 
-**Workflow fails with `Could not add SSH key to instance metadata`**
-- Add the `Compute Instance Admin (v1)` role to the service account.
+- Confirm VM firewall rule exists for source connector CIDR -> TCP 4001.
+- Confirm `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no`.
+- Confirm Docker published port is `4001:4001`.
+- Confirm service and connector are in compatible region/network routing setup.
 
-**2FA bot not filling the code**
+### 2FA bot not filling code
+
 - Check logs: `docker exec ib-gateway tail -f /home/ibgateway/2fa.log`
-- Verify `TOTP_SECRET` is the correct base32 key from your authenticator setup.
-
-**SSH into VM stops working after restart**
-- Enable SSH to auto-start: `sudo systemctl enable ssh && sudo systemctl enable ssh.socket`
+- Verify `TOTP_SECRET` is valid Base32 secret.
 
 ---
 

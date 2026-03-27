@@ -11,6 +11,10 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      GCE_INSTANCE_NAME: ${{ secrets.GCE_INSTANCE_NAME || 'interactive-brokers-quant-instance' }}
+      GCE_ZONE: ${{ secrets.GCE_ZONE || 'us-east1-c' }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/home/zwlddx0815/ib-docker' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -23,11 +27,11 @@ jobs:
       - name: Deploy and Log Setup
         uses: google-github-actions/ssh-compute@v0
         with:
-          instance_name: interactive-brokers-quant-instance
-          zone: us-east1-c
+          instance_name: ${{ env.GCE_INSTANCE_NAME }}
+          zone: ${{ env.GCE_ZONE }}
           ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
           command: |
-            cd ${{ secrets.DEPLOY_PATH || '/home/zwlddx0815/ib-docker' }}
+            cd ${{ env.DEPLOY_PATH }}
             sudo git fetch --all
             sudo git reset --hard origin/main
 
@@ -37,6 +41,8 @@ jobs:
             echo "TOTP_SECRET='${{ secrets.TOTP_SECRET }}'" >> .env
             echo "VNC_SERVER_PASSWORD='${{ secrets.VNC_SERVER_PASSWORD }}'" >> .env
             echo "TRADING_MODE='${{ secrets.TRADING_MODE }}'" >> .env
+            echo "ACCEPT_API_FROM_IP='${{ secrets.ACCEPT_API_FROM_IP || '10.8.0.0/28' }}'" >> .env
+            echo "ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY='${{ secrets.ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY || 'no' }}'" >> .env
 
             # Build image (cached after first build, fast on subsequent runs)
             sudo docker compose build
