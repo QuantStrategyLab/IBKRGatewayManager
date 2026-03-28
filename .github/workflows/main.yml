@@ -107,29 +107,6 @@ jobs:
           PY
           echo "ENV_FILE=$ENV_FILE" >> "$GITHUB_ENV"
 
-          DEPLOY_SCRIPT="$RUNNER_TEMP/ibkr-gateway-deploy.sh"
-          cat > "$DEPLOY_SCRIPT" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          cd "${DEPLOY_PATH}"
-          sudo docker compose build
-          sudo docker compose down
-          sudo docker compose up -d
-
-          echo "Waiting for container to stabilize..."
-          sleep 30
-
-          sudo bash ./scripts/install_2fa_bot_watcher.sh
-          sleep 5
-          sudo systemctl status ibkr-2fa-bot.timer --no-pager
-
-          echo "Deployment complete. Bot is monitoring the login window."
-          echo "Run 'docker exec ib-gateway tail -f /home/ibgateway/2fa.log' for real-time status."
-          EOF
-          chmod 700 "$DEPLOY_SCRIPT"
-          echo "DEPLOY_SCRIPT=$DEPLOY_SCRIPT" >> "$GITHUB_ENV"
-
       - name: Deploy and Log Setup
         run: |
           set -euo pipefail
@@ -165,12 +142,24 @@ jobs:
             --tunnel-through-iap \
             --ssh-key-file "${SSH_KEY_FILE}"
 
-          gcloud compute scp "${DEPLOY_SCRIPT}" "${REMOTE_TARGET}:${DEPLOY_PATH}/ibkr-gateway-deploy.sh" \
-            --project "${{ steps.auth.outputs.project_id }}" \
-            --zone "${GCE_ZONE}" \
-            --quiet \
-            --tunnel-through-iap \
-            --ssh-key-file "${SSH_KEY_FILE}"
+          REMOTE_DEPLOY_COMMAND=$(cat <<EOF
+          set -euo pipefail
+          cd '${DEPLOY_PATH}'
+          sudo docker compose build
+          sudo docker compose down
+          sudo docker compose up -d
+
+          echo "Waiting for container to stabilize..."
+          sleep 30
+
+          sudo bash ./scripts/install_2fa_bot_watcher.sh
+          sleep 5
+          sudo systemctl status ibkr-2fa-bot.timer --no-pager
+
+          echo "Deployment complete. Bot is monitoring the login window."
+          echo "Run 'docker exec ib-gateway tail -f /home/ibgateway/2fa.log' for real-time status."
+          EOF
+          )
 
           gcloud compute ssh "${REMOTE_TARGET}" \
             --project "${{ steps.auth.outputs.project_id }}" \
@@ -178,4 +167,4 @@ jobs:
             --quiet \
             --tunnel-through-iap \
             --ssh-key-file "${SSH_KEY_FILE}" \
-            --command "export DEPLOY_PATH='${DEPLOY_PATH}' && bash '${DEPLOY_PATH}/ibkr-gateway-deploy.sh' && rm -f '${DEPLOY_PATH}/ibkr-gateway-deploy.sh'"
+            --command "${REMOTE_DEPLOY_COMMAND}"
