@@ -76,20 +76,22 @@ If `IBKRQuant` and `IBKRGatewayManager` share one GitHub-managed config, keep th
 IB_GATEWAY_INSTANCE_NAME=interactive-brokers-quant-instance
 IB_GATEWAY_ZONE=us-central1-c
 IB_GATEWAY_MODE=paper
-CLOUD_RUN_EGRESS_CIDR=10.128.0.0/20
-GCE_USER=zwlddx0815
-DEPLOY_PATH=/home/zwlddx0815/ib-docker
-ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
-TWS_ACCEPT_INCOMING=accept
-READ_ONLY_API=no
+IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR=10.128.0.0/20
+IB_GATEWAY_GCE_USER=zwlddx0815
+IB_GATEWAY_DEPLOY_PATH=/home/zwlddx0815/ib-docker
+IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
+IB_GATEWAY_TWS_ACCEPT_INCOMING=accept
+IB_GATEWAY_READ_ONLY_API=no
 ```
 
 The workflow maps these shared values to the gateway container's `.env`:
 
 - `IB_GATEWAY_MODE` -> `TRADING_MODE`
-- `CLOUD_RUN_EGRESS_CIDR` -> `ACCEPT_API_FROM_IP`
+- `IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR` -> `ACCEPT_API_FROM_IP`
 - `IB_GATEWAY_INSTANCE_NAME` -> `GCE_INSTANCE_NAME`
 - `IB_GATEWAY_ZONE` -> `GCE_ZONE`
+- `IB_GATEWAY_GCE_USER` -> `GCE_USER`
+- `IB_GATEWAY_DEPLOY_PATH` -> `DEPLOY_PATH`
 
 `ACCEPT_API_FROM_IP` is intentionally treated as required now. For manual `docker compose` usage, if you forget to set it, Compose will fail fast instead of starting a gateway that Cloud Run can never reach.
 
@@ -151,17 +153,17 @@ When recreating your VM, use this order:
 
 | Variable | Purpose |
 | :--- | :--- |
-| `GCE_USER` | VM SSH username (for example `zwlddx0815`) |
-| `DEPLOY_PATH` | Repo path on VM (for example `/home/zwlddx0815/ib-docker`) |
+| `IB_GATEWAY_GCE_USER` | VM SSH username (for example `zwlddx0815`) |
+| `IB_GATEWAY_DEPLOY_PATH` | Repo path on VM (for example `/home/zwlddx0815/ib-docker`) |
 | `IB_GATEWAY_INSTANCE_NAME` | VM instance name |
 | `IB_GATEWAY_ZONE` | VM zone |
 | `IB_GATEWAY_MODE` | `paper` or `live` |
-| `CLOUD_RUN_EGRESS_CIDR` | Cloud Run Direct VPC egress or connector CIDR (example `10.8.0.0/26`) |
-| `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY` | Set to `no` for Cloud Run private IP access |
-| `TWS_ACCEPT_INCOMING` | Optional. Recommended `accept`. |
-| `READ_ONLY_API` | Optional. Recommended `no` if this service places trades. |
+| `IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR` | Cloud Run Direct VPC egress or connector CIDR (example `10.8.0.0/26`) |
+| `IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY` | Set to `no` for Cloud Run private IP access |
+| `IB_GATEWAY_TWS_ACCEPT_INCOMING` | Optional. Recommended `accept`. |
+| `IB_GATEWAY_READ_ONLY_API` | Optional. Recommended `no` if this service places trades. |
 
-Legacy secret names `GCE_INSTANCE_NAME`, `GCE_ZONE`, `TRADING_MODE`, `ACCEPT_API_FROM_IP`, and `GCE_USER` are still accepted as fallbacks, so you can migrate gradually instead of changing everything at once.
+Legacy names `GCE_INSTANCE_NAME`, `GCE_ZONE`, `TRADING_MODE`, `ACCEPT_API_FROM_IP`, `GCE_USER`, `DEPLOY_PATH`, `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY`, `TWS_ACCEPT_INCOMING`, and `READ_ONLY_API` are still accepted as fallbacks, so you can migrate gradually instead of changing everything at once.
 
 For direct `docker compose` usage outside GitHub Actions, `ACCEPT_API_FROM_IP` must still be set explicitly in `.env`; there is no longer a silent default CIDR.
 

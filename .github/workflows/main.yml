@@ -12,15 +12,15 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      GCE_USER: ${{ vars.GCE_USER || secrets.GCE_USER }}
+      GCE_USER: ${{ vars.IB_GATEWAY_GCE_USER || vars.GCE_USER || secrets.GCE_USER }}
       GCE_INSTANCE_NAME: ${{ vars.IB_GATEWAY_INSTANCE_NAME || secrets.GCE_INSTANCE_NAME }}
       GCE_ZONE: ${{ vars.IB_GATEWAY_ZONE || secrets.GCE_ZONE }}
-      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH }}
+      DEPLOY_PATH: ${{ vars.IB_GATEWAY_DEPLOY_PATH || vars.DEPLOY_PATH || secrets.DEPLOY_PATH }}
       IB_GATEWAY_MODE: ${{ vars.IB_GATEWAY_MODE || secrets.TRADING_MODE }}
-      CLOUD_RUN_EGRESS_CIDR: ${{ vars.CLOUD_RUN_EGRESS_CIDR || secrets.ACCEPT_API_FROM_IP }}
-      ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY: ${{ vars.ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY || secrets.ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY }}
-      TWS_ACCEPT_INCOMING: ${{ vars.TWS_ACCEPT_INCOMING || 'accept' }}
-      READ_ONLY_API: ${{ vars.READ_ONLY_API || 'no' }}
+      CLOUD_RUN_EGRESS_CIDR: ${{ vars.IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR || vars.CLOUD_RUN_EGRESS_CIDR || secrets.ACCEPT_API_FROM_IP }}
+      ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY: ${{ vars.IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY || vars.ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY || secrets.ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY }}
+      TWS_ACCEPT_INCOMING: ${{ vars.IB_GATEWAY_TWS_ACCEPT_INCOMING || vars.TWS_ACCEPT_INCOMING || 'accept' }}
+      READ_ONLY_API: ${{ vars.IB_GATEWAY_READ_ONLY_API || vars.READ_ONLY_API || 'no' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
