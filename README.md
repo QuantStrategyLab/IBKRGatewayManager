@@ -91,6 +91,8 @@ The workflow maps these shared values to the gateway container's `.env`:
 - `IB_GATEWAY_INSTANCE_NAME` -> `GCE_INSTANCE_NAME`
 - `IB_GATEWAY_ZONE` -> `GCE_ZONE`
 
+`ACCEPT_API_FROM_IP` is intentionally treated as required now. For manual `docker compose` usage, if you forget to set it, Compose will fail fast instead of starting a gateway that Cloud Run can never reach.
+
 ### 3. Start IBKR Gateway
 
 ```bash
@@ -158,6 +160,8 @@ When recreating your VM, use this order:
 | `READ_ONLY_API` | Optional. Recommended `no` if this service places trades. |
 
 Legacy secret names `GCE_INSTANCE_NAME`, `GCE_ZONE`, `TRADING_MODE`, `ACCEPT_API_FROM_IP`, and `GCE_USER` are still accepted as fallbacks, so you can migrate gradually instead of changing everything at once.
+
+For direct `docker compose` usage outside GitHub Actions, `ACCEPT_API_FROM_IP` must still be set explicitly in `.env`; there is no longer a silent default CIDR.
 
 ---
 
