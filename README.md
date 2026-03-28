@@ -93,6 +93,8 @@ The workflow maps these shared values to the gateway container's `.env`:
 
 `ACCEPT_API_FROM_IP` is intentionally treated as required now. For manual `docker compose` usage, if you forget to set it, Compose will fail fast instead of starting a gateway that Cloud Run can never reach.
 
+This shared GitHub config is scoped to the **IBKR deployment pair only** (`IBKRQuant` + `IBKRGatewayManager`). It should not be treated as a platform-wide secret set for unrelated quant projects. Secrets such as `GCP_SA_KEY`, `SSH_PRIVATE_KEY`, `TWS_USERID`, and `TWS_PASSWORD` remain repository-specific deployment credentials for this gateway module.
+
 ### 3. Start IBKR Gateway
 
 ```bash
@@ -162,6 +164,8 @@ When recreating your VM, use this order:
 Legacy secret names `GCE_INSTANCE_NAME`, `GCE_ZONE`, `TRADING_MODE`, `ACCEPT_API_FROM_IP`, and `GCE_USER` are still accepted as fallbacks, so you can migrate gradually instead of changing everything at once.
 
 For direct `docker compose` usage outside GitHub Actions, `ACCEPT_API_FROM_IP` must still be set explicitly in `.env`; there is no longer a silent default CIDR.
+
+These GitHub secrets are specific to this repository's deployment flow. They are not intended to be global secrets shared by every quant repository.
 
 ---
 
