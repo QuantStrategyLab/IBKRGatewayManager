@@ -70,7 +70,7 @@ ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
 
 ### Shared GitHub Config (Recommended)
 
-If `IBKRQuant` and `IBKRGatewayManager` share one GitHub-managed config, keep these non-secret values in GitHub Variables:
+If `InteractiveBrokersPlatform` and `IBKRGatewayManager` share one GitHub-managed config, keep these non-secret values in GitHub Variables:
 
 ```bash
 IB_GATEWAY_INSTANCE_NAME=interactive-brokers-quant-instance
@@ -95,7 +95,7 @@ The workflow maps these shared values to the gateway container's `.env`:
 
 `ACCEPT_API_FROM_IP` is intentionally treated as required now. For manual `docker compose` usage, if you forget to set it, Compose will fail fast instead of starting a gateway that Cloud Run can never reach.
 
-This shared GitHub config is scoped to the **IBKR deployment pair only** (`IBKRQuant` + `IBKRGatewayManager`). It should not be treated as a platform-wide secret set for unrelated quant projects. Secrets such as `GCP_SA_KEY`, `SSH_PRIVATE_KEY`, `TWS_USERID`, and `TWS_PASSWORD` remain repository-specific deployment credentials for this gateway module.
+This shared GitHub config is scoped to the **IBKR deployment pair only** (`InteractiveBrokersPlatform` + `IBKRGatewayManager`). It should not be treated as a platform-wide secret set for unrelated quant projects. Secrets such as `GCP_SA_KEY`, `SSH_PRIVATE_KEY`, `TWS_USERID`, and `TWS_PASSWORD` remain repository-specific deployment credentials for this gateway module.
 
 ### 3. Start IBKR Gateway
 
