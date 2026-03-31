@@ -13,6 +13,20 @@ on:
   schedule:
     - cron: '0 0 * * *'
   workflow_dispatch:
+    inputs:
+      deploy_mode:
+        description: keepalive skips docker build; full rebuilds the container
+        required: false
+        default: keepalive
+        type: choice
+        options:
+          - keepalive
+          - full
+      sync_github_secrets_to_secret_manager:
+        description: write current GitHub secrets into Secret Manager before deploy
+        required: false
+        default: false
+        type: boolean
 
 env:
   GCP_PROJECT_ID: interactivebrokersquant
@@ -42,6 +56,7 @@ jobs:
       TWS_PASSWORD_SECRET_NAME: ${{ vars.IB_GATEWAY_TWS_PASSWORD_SECRET_NAME }}
       TOTP_SECRET_SECRET_NAME: ${{ vars.IB_GATEWAY_TOTP_SECRET_SECRET_NAME }}
       VNC_SERVER_PASSWORD_SECRET_NAME: ${{ vars.IB_GATEWAY_VNC_SERVER_PASSWORD_SECRET_NAME }}
+      WORKFLOW_DISPATCH_MODE: ${{ github.event.inputs.deploy_mode }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -104,6 +119,47 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
           version: '>= 416.0.0'
+
+      - name: Sync GitHub secrets to Secret Manager
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sync_github_secrets_to_secret_manager }}
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          TWS_USERID: ${{ secrets.TWS_USERID }}
+          TWS_PASSWORD: ${{ secrets.TWS_PASSWORD }}
+          TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
+          VNC_SERVER_PASSWORD: ${{ secrets.VNC_SERVER_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          sync_secret() {
+            local secret_name="$1"
+            local secret_value="$2"
+            local label="$3"
+
+            if [ -z "${secret_name:-}" ]; then
+              echo "${label} secret name variable is required before syncing to Secret Manager." >&2
+              exit 1
+            fi
+
+            if [ -z "${secret_value:-}" ]; then
+              echo "${label} GitHub secret is empty; cannot sync to Secret Manager." >&2
+              exit 1
+            fi
+
+            gcloud secrets describe "${secret_name}" --project "${GCP_PROJECT_ID}" >/dev/null
+            printf '%s' "${secret_value}" | gcloud secrets versions add "${secret_name}" --project "${GCP_PROJECT_ID}" --data-file=- >/dev/null
+          }
+
+          echo "::add-mask::${TWS_USERID}"
+          echo "::add-mask::${TWS_PASSWORD}"
+          echo "::add-mask::${TOTP_SECRET}"
+          echo "::add-mask::${VNC_SERVER_PASSWORD}"
+
+          sync_secret "${SSH_PRIVATE_KEY_SECRET_NAME:-}" "${SSH_PRIVATE_KEY:-}" "SSH_PRIVATE_KEY"
+          sync_secret "${TWS_USERID_SECRET_NAME:-}" "${TWS_USERID:-}" "TWS_USERID"
+          sync_secret "${TWS_PASSWORD_SECRET_NAME:-}" "${TWS_PASSWORD:-}" "TWS_PASSWORD"
+          sync_secret "${TOTP_SECRET_SECRET_NAME:-}" "${TOTP_SECRET:-}" "TOTP_SECRET"
+          sync_secret "${VNC_SERVER_PASSWORD_SECRET_NAME:-}" "${VNC_SERVER_PASSWORD:-}" "VNC_SERVER_PASSWORD"
 
       - name: Prepare SSH key and deployment files
         env:
@@ -235,7 +291,14 @@ jobs:
           log_step "Uploading runtime env file"
           gcloud compute scp "${ENV_FILE}" "${REMOTE_TARGET}:${DEPLOY_PATH}/.env" "${SCP_FLAGS[@]}"
 
+          DEPLOY_MODE="full"
           if [ "${DEPLOY_EVENT_NAME}" = "schedule" ]; then
+            DEPLOY_MODE="keepalive"
+          elif [ "${DEPLOY_EVENT_NAME}" = "workflow_dispatch" ]; then
+            DEPLOY_MODE="${WORKFLOW_DISPATCH_MODE:-keepalive}"
+          fi
+
+          if [ "${DEPLOY_MODE}" = "keepalive" ]; then
             REMOTE_DEPLOY_COMMAND=$(cat <<EOF
           set -euo pipefail
           cd '${DEPLOY_PATH}'
@@ -270,5 +333,5 @@ jobs:
             )
           fi
 
-          log_step "Running remote deploy commands for event ${DEPLOY_EVENT_NAME}"
+          log_step "Running remote deploy commands for event ${DEPLOY_EVENT_NAME} in mode ${DEPLOY_MODE}"
           gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DEPLOY_COMMAND}"

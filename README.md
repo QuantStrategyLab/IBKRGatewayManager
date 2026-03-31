@@ -106,6 +106,8 @@ sudo bash ./scripts/install_2fa_bot_watcher.sh
 
 > If you use this repository's GitHub Actions workflow, pushing deploy-related changes to `main` triggers a full deployment to GCE. The daily scheduled run only does a lightweight keepalive start and watcher check; it does not rebuild the Docker image.
 
+> Manual `workflow_dispatch` defaults to `keepalive`. If you really need to rebuild the image, choose `deploy_mode=full` when dispatching it.
+
 ### 4. Verify on GCE VM
 
 ```bash
@@ -155,6 +157,8 @@ This workflow now uses **GitHub OIDC + Workload Identity Federation** for Google
 **Optional GitHub Variables for Secret Manager**
 
 If you want to stop storing the gateway credentials in GitHub Secrets, set these variables to Secret Manager secret names in project `interactivebrokersquant`. When a `*_SECRET_NAME` variable is present, the workflow reads the latest secret version from Secret Manager; otherwise it falls back to the matching GitHub secret.
+
+If you temporarily keep the values in GitHub Secrets during migration, you can run the workflow manually with `sync_github_secrets_to_secret_manager=true` once, then delete the GitHub Secrets after verification.
 
 | Variable | Reads secret value for |
 | :--- | :--- |
