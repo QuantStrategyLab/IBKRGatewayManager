@@ -183,15 +183,24 @@ jobs:
           set -euo pipefail
 
           REMOTE_TARGET="${GCE_USER}@${GCE_INSTANCE_NAME}"
-          SSH_COMMON_FLAGS=(
+          REMOTE_COMMON_FLAGS=(
             --project "${GCP_PROJECT_ID}"
             --zone "${GCE_ZONE}"
             --quiet
             --tunnel-through-iap
             --ssh-key-file "${SSH_KEY_FILE}"
+          )
+          SSH_FLAGS=(
+            "${REMOTE_COMMON_FLAGS[@]}"
             --ssh-flag="-o ServerAliveInterval=30"
             --ssh-flag="-o ServerAliveCountMax=10"
             --ssh-flag="-o TCPKeepAlive=yes"
+          )
+          SCP_FLAGS=(
+            "${REMOTE_COMMON_FLAGS[@]}"
+            --scp-flag="-o ServerAliveInterval=30"
+            --scp-flag="-o ServerAliveCountMax=10"
+            --scp-flag="-o TCPKeepAlive=yes"
           )
           REMOTE_SYNC_COMMAND=$(cat <<EOF
           set -euo pipefail
@@ -208,8 +217,8 @@ jobs:
           EOF
           )
 
-          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_COMMON_FLAGS[@]}" --command "${REMOTE_SYNC_COMMAND}"
-          gcloud compute scp "${ENV_FILE}" "${REMOTE_TARGET}:${DEPLOY_PATH}/.env" "${SSH_COMMON_FLAGS[@]}"
+          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_SYNC_COMMAND}"
+          gcloud compute scp "${ENV_FILE}" "${REMOTE_TARGET}:${DEPLOY_PATH}/.env" "${SCP_FLAGS[@]}"
 
           REMOTE_DEPLOY_COMMAND=$(cat <<EOF
           set -euo pipefail
@@ -230,4 +239,4 @@ jobs:
           EOF
           )
 
-          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_COMMON_FLAGS[@]}" --command "${REMOTE_DEPLOY_COMMAND}"
+          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DEPLOY_COMMAND}"
