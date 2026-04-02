@@ -59,7 +59,7 @@ jobs:
       WORKFLOW_DISPATCH_MODE: ${{ github.event.inputs.deploy_mode }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Check whether deployment config is complete
         env:
