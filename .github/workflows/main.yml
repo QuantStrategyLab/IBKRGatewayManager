@@ -303,9 +303,9 @@ jobs:
           cd '${DEPLOY_PATH}'
           echo "[\$(date -u +%FT%TZ)] Scheduled keepalive mode: skip docker build"
           sudo docker compose up -d --no-build
-          sudo docker compose ps
           sudo bash ./scripts/install_2fa_bot_watcher.sh
-          sleep 5
+          sudo bash ./scripts/wait_for_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
+          sudo docker compose ps
           sudo systemctl status ibkr-2fa-bot.timer --no-pager
           echo "[\$(date -u +%FT%TZ)] Keepalive complete."
           EOF
@@ -319,11 +319,9 @@ jobs:
           sudo docker compose down
           sudo docker compose up -d
 
-          echo "Waiting for container to stabilize..."
-          sleep 30
-
           sudo bash ./scripts/install_2fa_bot_watcher.sh
-          sleep 5
+          sudo bash ./scripts/wait_for_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
+          sudo docker compose ps
           sudo systemctl status ibkr-2fa-bot.timer --no-pager
 
           echo "Deployment complete. Bot is monitoring the login window."

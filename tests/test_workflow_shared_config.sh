@@ -43,6 +43,7 @@ grep -Fq 'elif [ "${DEPLOY_EVENT_NAME}" = "workflow_dispatch" ]; then' "$workflo
 grep -Fq 'DEPLOY_MODE="${WORKFLOW_DISPATCH_MODE:-keepalive}"' "$workflow_file"
 grep -Fq 'Scheduled keepalive mode: skip docker build' "$workflow_file"
 grep -Fq 'sudo docker compose up -d --no-build' "$workflow_file"
+grep -Fq "sudo bash ./scripts/wait_for_ib_gateway_ready.sh '\${IB_GATEWAY_MODE}'" "$workflow_file"
 grep -Fq 'Full deploy mode: rebuilding container' "$workflow_file"
 grep -Fq '"TRADING_MODE": os.environ["IB_GATEWAY_MODE"]' "$workflow_file"
 grep -Fq '"ACCEPT_API_FROM_IP": os.environ["CLOUD_RUN_EGRESS_CIDR"]' "$workflow_file"
