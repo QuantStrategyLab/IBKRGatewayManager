@@ -12,6 +12,10 @@ services:
       - TRADING_MODE=${TRADING_MODE:-paper}
       - TWS_ACCEPT_INCOMING=${TWS_ACCEPT_INCOMING:-accept}
       - READ_ONLY_API=${READ_ONLY_API:-no}
+      # e2-micro has less than 1 GiB RAM. The upstream image defaults to
+      # -Xmx768m, which can starve sshd/Docker/guest-agent. Keep this
+      # configurable, but use a safer default for the current VM.
+      - JAVA_HEAP_SIZE=${JAVA_HEAP_SIZE:-512}
       - VNC_SERVER_PASSWORD=${VNC_SERVER_PASSWORD}
       - LOGIN_TIMEOUT=600
 

@@ -58,6 +58,7 @@ VNC_SERVER_PASSWORD=your_vnc_password
 TRADING_MODE=live
 TWS_ACCEPT_INCOMING=accept
 READ_ONLY_API=no
+JAVA_HEAP_SIZE=512
 
 # Recommended: use the exact CIDR used by your Cloud Run egress path
 # Direct VPC egress: use the subnet CIDR
@@ -181,6 +182,12 @@ If you temporarily keep the values in GitHub Secrets during migration, you can r
 | `IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY` | Set to `no` for Cloud Run private IP access |
 | `IB_GATEWAY_TWS_ACCEPT_INCOMING` | Optional. Recommended `accept`. |
 | `IB_GATEWAY_READ_ONLY_API` | Optional. Recommended `no` if this service places trades. |
+
+The current VM is an `e2-micro`, so the deployment intentionally sets `JAVA_HEAP_SIZE=512`
+by default and enables a 2 GiB host swap file during keepalive/deploy. Without this,
+the upstream gateway image's default `-Xmx768m` can leave too little memory for sshd,
+Docker, and the GCE guest agent. For better long-running stability, use at least
+`e2-small` / `e2-medium` instead of relying only on swap.
 
 For direct `docker compose` usage outside GitHub Actions, `ACCEPT_API_FROM_IP` must still be set explicitly in `.env`; there is no longer a silent default CIDR.
 

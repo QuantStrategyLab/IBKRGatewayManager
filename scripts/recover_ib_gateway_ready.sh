@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+repo_dir="$(cd "${script_dir}/.." && pwd)"
+container_name="${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}"
+gateway_mode="${1:-${IB_GATEWAY_MODE:-paper}}"
+initial_wait_seconds="${IB_GATEWAY_RECOVERY_INITIAL_WAIT_SECONDS:-60}"
+restart_wait_seconds="${IB_GATEWAY_RECOVERY_RESTART_WAIT_SECONDS:-180}"
+recreate_wait_seconds="${IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS:-240}"
+
+cd "${repo_dir}"
+
+wait_for_ready() {
+  local timeout_seconds="$1"
+  IB_GATEWAY_CONTAINER_NAME="${container_name}" \
+  IB_GATEWAY_READY_TIMEOUT_SECONDS="${timeout_seconds}" \
+    bash "${script_dir}/wait_for_ib_gateway_ready.sh" "${gateway_mode}"
+}
+
+echo "Ensuring ${container_name} is running before readiness check."
+docker compose up -d --no-build
+
+if wait_for_ready "${initial_wait_seconds}"; then
+  exit 0
+fi
+
+echo "IB gateway API was not ready; restarting ${container_name} and retrying." >&2
+docker compose ps >&2 || true
+docker compose restart "${container_name}"
+
+if wait_for_ready "${restart_wait_seconds}"; then
+  exit 0
+fi
+
+echo "IB gateway API is still not ready; recreating ${container_name} and retrying." >&2
+docker compose up -d --force-recreate --no-build "${container_name}"
+
+if wait_for_ready "${recreate_wait_seconds}"; then
+  exit 0
+fi
+
+echo "IB gateway API did not recover after restart/recreate." >&2
+docker compose ps >&2 || true
+docker logs --tail 160 "${container_name}" >&2 || true
+exit 1

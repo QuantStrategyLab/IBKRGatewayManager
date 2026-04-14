@@ -269,6 +269,52 @@ jobs:
             --scp-flag="-o ServerAliveCountMax=10"
             --scp-flag="-o TCPKeepAlive=yes"
           )
+
+          reset_instance_and_wait_for_ssh() {
+            log_step "Resetting ${GCE_INSTANCE_NAME} after SSH/SCP failure"
+            gcloud compute instances reset "${GCE_INSTANCE_NAME}" \
+              --project "${GCP_PROJECT_ID}" \
+              --zone "${GCE_ZONE}" \
+              --quiet
+
+            for attempt in {1..36}; do
+              if gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "true" >/dev/null 2>&1; then
+                log_step "SSH recovered after VM reset on attempt ${attempt}"
+                return 0
+              fi
+              sleep 10
+            done
+
+            echo "SSH did not recover after VM reset." >&2
+            return 1
+          }
+
+          run_remote_ssh() {
+            local label="$1"
+            local remote_command="$2"
+
+            if gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${remote_command}"; then
+              return 0
+            fi
+
+            log_step "${label} failed; resetting VM and retrying once"
+            reset_instance_and_wait_for_ssh
+            gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${remote_command}"
+          }
+
+          copy_remote_file() {
+            local source_file="$1"
+            local dest_file="$2"
+
+            if gcloud compute scp "${source_file}" "${REMOTE_TARGET}:${dest_file}" "${SCP_FLAGS[@]}"; then
+              return 0
+            fi
+
+            log_step "SCP upload failed; resetting VM and retrying once"
+            reset_instance_and_wait_for_ssh
+            gcloud compute scp "${source_file}" "${REMOTE_TARGET}:${dest_file}" "${SCP_FLAGS[@]}"
+          }
+
           REMOTE_SYNC_COMMAND=$(cat <<EOF
           set -euo pipefail
           echo "[\$(date -u +%FT%TZ)] Syncing repository contents"
@@ -286,9 +332,9 @@ jobs:
           )
 
           log_step "Syncing repository to ${DEPLOY_PATH}"
-          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_SYNC_COMMAND}"
+          run_remote_ssh "Repository sync" "${REMOTE_SYNC_COMMAND}"
           log_step "Uploading runtime env file"
-          gcloud compute scp "${ENV_FILE}" "${REMOTE_TARGET}:${DEPLOY_PATH}/.env" "${SCP_FLAGS[@]}"
+          copy_remote_file "${ENV_FILE}" "${DEPLOY_PATH}/.env"
 
           DEPLOY_MODE="full"
           if [ "${DEPLOY_EVENT_NAME}" = "schedule" ]; then
@@ -302,9 +348,9 @@ jobs:
           set -euo pipefail
           cd '${DEPLOY_PATH}'
           echo "[\$(date -u +%FT%TZ)] Scheduled keepalive mode: skip docker build"
-          sudo docker compose up -d --no-build
+          sudo bash ./scripts/ensure_host_swap.sh
           sudo bash ./scripts/install_2fa_bot_watcher.sh
-          sudo bash ./scripts/wait_for_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
+          sudo bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
           sudo docker compose ps
           sudo systemctl status ibkr-2fa-bot.timer --no-pager
           echo "[\$(date -u +%FT%TZ)] Keepalive complete."
@@ -315,12 +361,13 @@ jobs:
           set -euo pipefail
           cd '${DEPLOY_PATH}'
           echo "[\$(date -u +%FT%TZ)] Full deploy mode: rebuilding container"
+          sudo bash ./scripts/ensure_host_swap.sh
           sudo docker compose build
           sudo docker compose down
           sudo docker compose up -d
 
           sudo bash ./scripts/install_2fa_bot_watcher.sh
-          sudo bash ./scripts/wait_for_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
+          sudo bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
           sudo docker compose ps
           sudo systemctl status ibkr-2fa-bot.timer --no-pager
 
@@ -331,4 +378,4 @@ jobs:
           fi
 
           log_step "Running remote deploy commands for event ${DEPLOY_EVENT_NAME} in mode ${DEPLOY_MODE}"
-          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DEPLOY_COMMAND}"
+          run_remote_ssh "Remote deploy" "${REMOTE_DEPLOY_COMMAND}"
