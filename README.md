@@ -9,6 +9,7 @@ An automated deployment solution for IBKR Gateway on Google Compute Engine (GCE)
 - **Containerized Deployment**: Docker-based setup.
 - **Automated 2FA**: Python bot (`pyotp` + `xdotool`) auto-fills TOTP.
 - **Daily Auto-Reconnect**: restart policy for long-running reliability.
+- **API Handshake Recovery**: systemd health check validates the IB API handshake and restarts/recreates the container if the API is not ready.
 - **Private Network API Access**: IBKR API exposed on GCE private network for Cloud Run.
 
 ---
@@ -103,6 +104,7 @@ This shared GitHub config is scoped to the **IBKR deployment pair only** (`Inter
 ```bash
 docker compose up -d --build
 sudo bash ./scripts/install_2fa_bot_watcher.sh
+sudo bash ./scripts/install_gateway_health_watcher.sh
 ```
 
 > If you use this repository's GitHub Actions workflow, pushing deploy-related changes to `main` triggers a full deployment to GCE. The daily scheduled run only does a lightweight keepalive start and watcher check; it does not rebuild the Docker image.
@@ -117,6 +119,17 @@ ss -lntp | grep -E '4001|4002'
 ```
 
 Expected: host is listening on `0.0.0.0:4001` and/or `0.0.0.0:4002` (or VM private interface) and container is healthy.
+
+The readiness script checks the actual IB API handshake, not just TCP connectivity:
+
+```bash
+sudo bash ./scripts/wait_for_ib_gateway_ready.sh paper
+```
+
+It opens an IB protocol session, waits for the Gateway handshake, sends `StartApi`,
+and only succeeds after `nextValidId` plus `managedAccounts` have arrived. This
+catches the common failure mode where the Docker port is listening but Gateway is
+blocked by a login/API prompt.
 
 ---
 
@@ -213,6 +226,25 @@ docker exec ib-gateway pgrep -f 2fa_bot.py
 
 ```bash
 systemctl status ibkr-2fa-bot.timer --no-pager
+```
+
+### Check Gateway API Health Timers
+
+```bash
+systemctl status ibkr-gateway-healthcheck.timer --no-pager
+systemctl status ibkr-gateway-daily-restart.timer --no-pager
+```
+
+`ibkr-gateway-healthcheck.timer` runs every 5 minutes by default. It calls
+`recover_ib_gateway_ready.sh`, which first checks IB API handshake readiness,
+then restarts and finally recreates the container if the API does not recover.
+
+`ibkr-gateway-daily-restart.timer` restarts the Gateway once per day at
+`10:30 UTC` by default, then waits for the same API handshake readiness. Override
+the schedule during install with:
+
+```bash
+IB_GATEWAY_DAILY_RESTART_ON_CALENDAR='Mon..Fri 10:30:00 UTC' sudo bash ./scripts/install_gateway_health_watcher.sh
 ```
 
 ### Check API Port in Container
