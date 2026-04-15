@@ -350,9 +350,12 @@ jobs:
           echo "[\$(date -u +%FT%TZ)] Scheduled keepalive mode: skip docker build"
           sudo bash ./scripts/ensure_host_swap.sh
           sudo bash ./scripts/install_2fa_bot_watcher.sh
+          sudo bash ./scripts/install_gateway_health_watcher.sh
           sudo bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
           sudo docker compose ps
           sudo systemctl status ibkr-2fa-bot.timer --no-pager
+          sudo systemctl status ibkr-gateway-healthcheck.timer --no-pager
+          sudo systemctl status ibkr-gateway-daily-restart.timer --no-pager
           echo "[\$(date -u +%FT%TZ)] Keepalive complete."
           EOF
             )
@@ -367,9 +370,12 @@ jobs:
           sudo docker compose up -d
 
           sudo bash ./scripts/install_2fa_bot_watcher.sh
+          sudo bash ./scripts/install_gateway_health_watcher.sh
           sudo bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
           sudo docker compose ps
           sudo systemctl status ibkr-2fa-bot.timer --no-pager
+          sudo systemctl status ibkr-gateway-healthcheck.timer --no-pager
+          sudo systemctl status ibkr-gateway-daily-restart.timer --no-pager
 
           echo "Deployment complete. Bot is monitoring the login window."
           echo "Run 'docker exec ib-gateway tail -f /home/ibgateway/2fa.log' for real-time status."
