@@ -42,6 +42,31 @@ timeout_seconds = float(os.environ["IB_GATEWAY_HEALTHCHECK_TIMEOUT_SECONDS"])
 deadline = time.monotonic() + timeout_seconds
 
 
+try:
+    from ib_insync import IB
+except ImportError:
+    IB = None
+
+
+if IB is not None:
+    ib = IB()
+    try:
+        ib.connect(host, port, clientId=client_id, timeout=timeout_seconds)
+        accounts = ib.managedAccounts()
+        if not accounts:
+            raise RuntimeError("IB API healthcheck did not receive managed accounts")
+        print(
+            "IB API ib_insync healthcheck ready: "
+            f"server_version={ib.client.serverVersion()} "
+            f"client_id={client_id} "
+            f"accounts={','.join(accounts)}"
+        )
+    finally:
+        if ib.isConnected():
+            ib.disconnect()
+    raise SystemExit(0)
+
+
 def remaining_timeout() -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:

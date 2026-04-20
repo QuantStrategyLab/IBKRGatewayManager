@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 compose_file="$repo_dir/docker-compose.yml"
+dockerfile="$repo_dir/Dockerfile"
+
+grep -Fq 'pip3 install pyotp ib_insync --break-system-packages' "$dockerfile"
 
 grep -Fq '      - "4001:4003"' "$compose_file"
 grep -Fq '      - "4002:4004"' "$compose_file"
