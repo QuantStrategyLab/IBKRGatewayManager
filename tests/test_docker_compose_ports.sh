@@ -6,6 +6,9 @@ compose_file="$repo_dir/docker-compose.yml"
 dockerfile="$repo_dir/Dockerfile"
 
 grep -Fq 'pip3 install pyotp ib_insync --break-system-packages' "$dockerfile"
+grep -Fq 'libgtk-3-0' "$dockerfile"
+grep -Fq 'libglib2.0-0' "$dockerfile"
+grep -Fq 'libxtst6' "$dockerfile"
 
 grep -Fq '      - "4001:4003"' "$compose_file"
 grep -Fq '      - "4002:4004"' "$compose_file"
