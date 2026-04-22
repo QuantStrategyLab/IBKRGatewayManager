@@ -14,4 +14,7 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+COPY --chown=1000:1000 ./container_overrides/run.sh /home/ibgateway/scripts/run.sh
+RUN chmod a+x /home/ibgateway/scripts/run.sh
+
 USER ibgateway

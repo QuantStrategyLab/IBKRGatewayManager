@@ -59,6 +59,9 @@ VNC_SERVER_PASSWORD=your_vnc_password
 TRADING_MODE=live
 TWS_ACCEPT_INCOMING=accept
 READ_ONLY_API=no
+TWOFA_TIMEOUT_ACTION=restart
+RELOGIN_AFTER_TWOFA_TIMEOUT=yes
+EXISTING_SESSION_DETECTED_ACTION=primary
 JAVA_HEAP_SIZE=512
 
 # Recommended: use the exact CIDR used by your Cloud Run egress path
@@ -201,6 +204,11 @@ by default and enables a 2 GiB host swap file during keepalive/deploy. Without t
 the upstream gateway image's default `-Xmx768m` can leave too little memory for sshd,
 Docker, and the GCE guest agent. For better long-running stability, use at least
 `e2-small` / `e2-medium` instead of relying only on swap.
+
+This repository also overrides the upstream headless startup script so Gateway runs with
+`Xvfb :1 -screen 0 1024x768x24` and `x11vnc -noxdamage`. On the current GCE target, the
+upstream `16bpp` display frequently led to black VNC output and intermittent IBC window
+detection failures before login completed.
 
 For direct `docker compose` usage outside GitHub Actions, `ACCEPT_API_FROM_IP` must still be set explicitly in `.env`; there is no longer a silent default CIDR.
 
