@@ -14,6 +14,14 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Give IBC more time to detect the login/config dialog on the current headless
+# GCE target. The upstream 60s default has been too short during keepalive
+# recovery and caused intermittent exit code 1112 before the Gateway became
+# API-ready.
+RUN sed -i 's/^LoginDialogDisplayTimeout=60$/LoginDialogDisplayTimeout=180/' \
+    /home/ibgateway/ibc/config.ini \
+    /home/ibgateway/ibc/config.ini.tmpl
+
 COPY --chown=1000:1000 ./container_overrides/run.sh /home/ibgateway/scripts/run.sh
 RUN chmod a+x /home/ibgateway/scripts/run.sh
 

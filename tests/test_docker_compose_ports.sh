@@ -8,6 +8,8 @@ run_override="$repo_dir/container_overrides/run.sh"
 
 grep -Fq 'pip3 install pyotp ib_insync --break-system-packages' "$dockerfile"
 grep -Fq 'FROM gnzsnz/ib-gateway:10.37.1q' "$dockerfile"
+grep -Fq "LoginDialogDisplayTimeout=60$/LoginDialogDisplayTimeout=180" "$dockerfile"
+grep -Fq '/home/ibgateway/ibc/config.ini.tmpl' "$dockerfile"
 grep -Fq 'COPY --chown=1000:1000 ./container_overrides/run.sh /home/ibgateway/scripts/run.sh' "$dockerfile"
 grep -Fq 'chmod a+x /home/ibgateway/scripts/run.sh' "$dockerfile"
 grep -Fq 'libgtk-3-0' "$dockerfile"

@@ -210,6 +210,11 @@ This repository also overrides the upstream headless startup script so Gateway r
 upstream `16bpp` display frequently led to black VNC output and intermittent IBC window
 detection failures before login completed.
 
+The image also raises `LoginDialogDisplayTimeout` from `60` to `180` seconds in both
+`/home/ibgateway/ibc/config.ini` and `config.ini.tmpl`. Keepalive recovery on the current
+GCE target has occasionally needed longer than the upstream default before IBC can detect
+the login/config dialog and drive Gateway back to an API-ready state.
+
 For direct `docker compose` usage outside GitHub Actions, `ACCEPT_API_FROM_IP` must still be set explicitly in `.env`; there is no longer a silent default CIDR.
 
 These GitHub secrets are specific to this repository's deployment flow. They are not intended to be global secrets shared by every quant repository.
