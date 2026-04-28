@@ -20,6 +20,10 @@ services:
       # -Xmx768m, which can starve sshd/Docker/guest-agent. Keep this
       # configurable, but use a safer default for the current VM.
       - JAVA_HEAP_SIZE=${JAVA_HEAP_SIZE:-512}
+      # The upstream vmoptions use 20 parallel GC threads, which is too
+      # aggressive for the current 2 vCPU VM and can slow Gateway startup.
+      - IB_GATEWAY_PARALLEL_GC_THREADS=${IB_GATEWAY_PARALLEL_GC_THREADS:-2}
+      - IB_GATEWAY_CONC_GC_THREADS=${IB_GATEWAY_CONC_GC_THREADS:-1}
       - VNC_SERVER_PASSWORD=${VNC_SERVER_PASSWORD}
       - LOGIN_TIMEOUT=600
 
