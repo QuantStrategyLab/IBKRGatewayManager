@@ -69,4 +69,3 @@ EOF
 "$systemctl_bin" daemon-reload
 "$systemctl_bin" enable --now ibkr-gateway-healthcheck.timer
 "$systemctl_bin" enable --now ibkr-gateway-daily-restart.timer
-"$systemctl_bin" start ibkr-gateway-healthcheck.service
