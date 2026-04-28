@@ -351,8 +351,8 @@ jobs:
           sudo systemctl stop ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service 2>/dev/null || true
           sudo bash ./scripts/ensure_host_swap.sh
           sudo bash ./scripts/install_2fa_bot_watcher.sh
-          sudo bash ./scripts/install_gateway_health_watcher.sh
           sudo bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
+          sudo bash ./scripts/install_gateway_health_watcher.sh
           sudo docker compose ps
           sudo systemctl status ibkr-2fa-bot.timer --no-pager
           sudo systemctl status ibkr-gateway-healthcheck.timer --no-pager
@@ -372,8 +372,8 @@ jobs:
           sudo docker compose up -d
 
           sudo bash ./scripts/install_2fa_bot_watcher.sh
-          sudo bash ./scripts/install_gateway_health_watcher.sh
           sudo bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
+          sudo bash ./scripts/install_gateway_health_watcher.sh
           sudo docker compose ps
           sudo systemctl status ibkr-2fa-bot.timer --no-pager
           sudo systemctl status ibkr-gateway-healthcheck.timer --no-pager

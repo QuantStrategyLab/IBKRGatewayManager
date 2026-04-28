@@ -55,6 +55,18 @@ grep -Fq "sudo bash ./scripts/recover_ib_gateway_ready.sh '\${IB_GATEWAY_MODE}'"
 grep -Fq 'sudo systemctl status ibkr-gateway-healthcheck.timer --no-pager' "$workflow_file"
 grep -Fq 'sudo systemctl status ibkr-gateway-daily-restart.timer --no-pager' "$workflow_file"
 grep -Fq 'Full deploy mode: rebuilding container' "$workflow_file"
+
+mapfile -t recover_lines < <(grep -nF "sudo bash ./scripts/recover_ib_gateway_ready.sh '\${IB_GATEWAY_MODE}'" "$workflow_file" | cut -d: -f1)
+mapfile -t health_watcher_lines < <(grep -nF 'sudo bash ./scripts/install_gateway_health_watcher.sh' "$workflow_file" | cut -d: -f1)
+test "${#recover_lines[@]}" -eq 2
+test "${#health_watcher_lines[@]}" -eq 2
+for i in 0 1; do
+  if [ "${recover_lines[$i]}" -ge "${health_watcher_lines[$i]}" ]; then
+    echo "Gateway health watcher must be installed after explicit recovery in deploy block $i" >&2
+    exit 1
+  fi
+done
+
 grep -Fq '"TRADING_MODE": os.environ["IB_GATEWAY_MODE"]' "$workflow_file"
 grep -Fq '"ACCEPT_API_FROM_IP": os.environ["CLOUD_RUN_EGRESS_CIDR"]' "$workflow_file"
 grep -Fq 'REMOTE_DEPLOY_COMMAND=$(cat <<EOF' "$workflow_file"
