@@ -63,6 +63,7 @@ start_vnc() {
 }
 
 start_IBC() {
+	configure_ibc_login_dialog_timeout
 	echo ".> Starting IBC in ${TRADING_MODE} mode, with params:"
 	echo ".>		Version: ${TWS_MAJOR_VRSN}"
 	echo ".>		program: ${IBC_COMMAND:-gateway}"
@@ -80,6 +81,27 @@ start_IBC() {
 	pid+=("$_p")
 	export pid
 	echo "$_p" >"/tmp/pid_${TRADING_MODE}"
+}
+
+configure_ibc_login_dialog_timeout() {
+	local timeout="${IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT:-180}"
+	local files=(
+		"${IBC_INI:-/home/ibgateway/ibc/config.ini}"
+		"/home/ibgateway/ibc/config.ini"
+		"/home/ibgateway/ibc/config.ini.tmpl"
+	)
+	local file
+
+	for file in "${files[@]}"; do
+		if [ ! -f "$file" ]; then
+			continue
+		fi
+		if grep -Eq '^LoginDialogDisplayTimeout\s*=' "$file"; then
+			sed -i -E "s/^LoginDialogDisplayTimeout\s*=.*/LoginDialogDisplayTimeout=${timeout}/" "$file"
+		else
+			printf '\nLoginDialogDisplayTimeout=%s\n' "$timeout" >>"$file"
+		fi
+	done
 }
 
 start_process() {
