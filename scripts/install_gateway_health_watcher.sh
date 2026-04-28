@@ -32,7 +32,7 @@ cat >"$systemd_dir/ibkr-gateway-healthcheck.timer" <<EOF
 Description=Run IBKR Gateway API readiness recovery every $health_interval_seconds seconds
 
 [Timer]
-OnBootSec=5min
+OnActiveSec=$health_interval_seconds
 OnUnitActiveSec=$health_interval_seconds
 Unit=ibkr-gateway-healthcheck.service
 

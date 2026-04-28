@@ -104,6 +104,30 @@ configure_ibc_login_dialog_timeout() {
 	done
 }
 
+configure_ib_gateway_vmoptions() {
+	local parallel_threads="${IB_GATEWAY_PARALLEL_GC_THREADS:-2}"
+	local conc_threads="${IB_GATEWAY_CONC_GC_THREADS:-1}"
+	local vmoptions
+
+	vmoptions="$(find "${TWS_PATH}" -maxdepth 2 -name ibgateway.vmoptions -type f 2>/dev/null | head -n 1 || true)"
+	if [ -z "$vmoptions" ]; then
+		echo ".> IB Gateway vmoptions file not found; skipping Java GC thread tuning"
+		return
+	fi
+
+	if grep -Eq '^-XX:ParallelGCThreads=' "$vmoptions"; then
+		sed -i -E "s/^-XX:ParallelGCThreads=.*/-XX:ParallelGCThreads=${parallel_threads}/" "$vmoptions"
+	else
+		printf '\n-XX:ParallelGCThreads=%s\n' "$parallel_threads" >>"$vmoptions"
+	fi
+	if grep -Eq '^-XX:ConcGCThreads=' "$vmoptions"; then
+		sed -i -E "s/^-XX:ConcGCThreads=.*/-XX:ConcGCThreads=${conc_threads}/" "$vmoptions"
+	else
+		printf '\n-XX:ConcGCThreads=%s\n' "$conc_threads" >>"$vmoptions"
+	fi
+	echo ".> Java GC threads set to ParallelGCThreads=${parallel_threads}, ConcGCThreads=${conc_threads}"
+}
+
 start_process() {
 	set_ports
 	apply_settings
@@ -118,6 +142,7 @@ fi
 start_xvfb
 setup_ssh
 set_java_heap
+configure_ib_gateway_vmoptions
 start_vnc
 
 if [ -n "$X_SCRIPTS" ]; then
