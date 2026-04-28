@@ -109,7 +109,7 @@ configure_ib_gateway_vmoptions() {
 	local conc_threads="${IB_GATEWAY_CONC_GC_THREADS:-1}"
 	local vmoptions
 
-	vmoptions="$(find "${TWS_PATH}" -maxdepth 2 -name ibgateway.vmoptions -type f 2>/dev/null | head -n 1 || true)"
+	vmoptions="$(find "${TWS_PATH}" -maxdepth 3 -name ibgateway.vmoptions -type f 2>/dev/null | head -n 1 || true)"
 	if [ -z "$vmoptions" ]; then
 		echo ".> IB Gateway vmoptions file not found; skipping Java GC thread tuning"
 		return
