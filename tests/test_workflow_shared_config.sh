@@ -49,6 +49,7 @@ grep -Fq 'gcloud compute instances reset "${GCE_INSTANCE_NAME}"' "$workflow_file
 grep -Fq 'run_remote_ssh "Repository sync" "${REMOTE_SYNC_COMMAND}"' "$workflow_file"
 grep -Fq 'copy_remote_file "${ENV_FILE}" "${DEPLOY_PATH}/.env"' "$workflow_file"
 grep -Fq 'sudo bash ./scripts/ensure_host_swap.sh' "$workflow_file"
+grep -Fq 'sudo systemctl stop ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service 2>/dev/null || true' "$workflow_file"
 grep -Fq 'sudo bash ./scripts/install_gateway_health_watcher.sh' "$workflow_file"
 grep -Fq "sudo bash ./scripts/recover_ib_gateway_ready.sh '\${IB_GATEWAY_MODE}'" "$workflow_file"
 grep -Fq 'sudo systemctl status ibkr-gateway-healthcheck.timer --no-pager' "$workflow_file"

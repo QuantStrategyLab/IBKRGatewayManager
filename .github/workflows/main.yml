@@ -348,6 +348,7 @@ jobs:
           set -euo pipefail
           cd '${DEPLOY_PATH}'
           echo "[\$(date -u +%FT%TZ)] Scheduled keepalive mode: skip docker build"
+          sudo systemctl stop ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service 2>/dev/null || true
           sudo bash ./scripts/ensure_host_swap.sh
           sudo bash ./scripts/install_2fa_bot_watcher.sh
           sudo bash ./scripts/install_gateway_health_watcher.sh
@@ -364,6 +365,7 @@ jobs:
           set -euo pipefail
           cd '${DEPLOY_PATH}'
           echo "[\$(date -u +%FT%TZ)] Full deploy mode: rebuilding container"
+          sudo systemctl stop ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service 2>/dev/null || true
           sudo bash ./scripts/ensure_host_swap.sh
           sudo docker compose build
           sudo docker compose down

@@ -23,6 +23,7 @@ Type=oneshot
 WorkingDirectory=$repo_dir
 Environment=IB_GATEWAY_CONTAINER_NAME=$container_name
 Environment=IB_GATEWAY_MODE=$gateway_mode
+Environment=IB_GATEWAY_RECOVERY_LOCK_WAIT_SECONDS=0
 ExecStart=/bin/bash -lc 'cd "$repo_dir" && exec ./scripts/recover_ib_gateway_ready.sh "$gateway_mode"'
 EOF
 
