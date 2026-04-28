@@ -11,7 +11,7 @@ grep -Fq 'ready_timeout_seconds="${IB_GATEWAY_READY_TIMEOUT_SECONDS:-240}"' "$sc
 grep -Fq 'gateway_port=4002' "$script_file"
 grep -Fq 'gateway_port=4001' "$script_file"
 grep -Fq "docker inspect --format '{{.State.Running}}'" "$script_file"
-grep -Fq 'IB_GATEWAY_HEALTHCHECK_CLIENT_ID:-999' "$script_file"
+grep -Fq 'IB_GATEWAY_HEALTHCHECK_CLIENT_ID:-$((9000 + (BASHPID % 9000)))' "$script_file"
 grep -Fq 'check_api_handshake()' "$script_file"
 grep -Fq 'from ib_insync import IB' "$script_file"
 grep -Fq 'ib.connect(host, port, clientId=client_id, timeout=timeout_seconds)' "$script_file"

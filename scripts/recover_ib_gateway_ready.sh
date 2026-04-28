@@ -5,9 +5,9 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_dir="$(cd "${script_dir}/.." && pwd)"
 container_name="${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}"
 gateway_mode="${1:-${IB_GATEWAY_MODE:-paper}}"
-initial_wait_seconds="${IB_GATEWAY_RECOVERY_INITIAL_WAIT_SECONDS:-60}"
-restart_wait_seconds="${IB_GATEWAY_RECOVERY_RESTART_WAIT_SECONDS:-180}"
-recreate_wait_seconds="${IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS:-240}"
+initial_wait_seconds="${IB_GATEWAY_RECOVERY_INITIAL_WAIT_SECONDS:-240}"
+restart_wait_seconds="${IB_GATEWAY_RECOVERY_RESTART_WAIT_SECONDS:-300}"
+recreate_wait_seconds="${IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS:-360}"
 
 cd "${repo_dir}"
 

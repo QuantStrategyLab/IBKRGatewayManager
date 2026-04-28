@@ -6,7 +6,7 @@ gateway_mode="${1:-${IB_GATEWAY_MODE:-paper}}"
 ready_timeout_seconds="${IB_GATEWAY_READY_TIMEOUT_SECONDS:-240}"
 poll_interval_seconds="${IB_GATEWAY_READY_POLL_INTERVAL_SECONDS:-5}"
 handshake_timeout_seconds="${IB_GATEWAY_HANDSHAKE_TIMEOUT_SECONDS:-12}"
-healthcheck_client_id="${IB_GATEWAY_HEALTHCHECK_CLIENT_ID:-999}"
+healthcheck_client_id="${IB_GATEWAY_HEALTHCHECK_CLIENT_ID:-$((9000 + (BASHPID % 9000)))}"
 
 case "${gateway_mode}" in
   paper)
