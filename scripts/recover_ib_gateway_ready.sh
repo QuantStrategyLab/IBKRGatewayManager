@@ -8,8 +8,24 @@ gateway_mode="${1:-${IB_GATEWAY_MODE:-paper}}"
 initial_wait_seconds="${IB_GATEWAY_RECOVERY_INITIAL_WAIT_SECONDS:-240}"
 restart_wait_seconds="${IB_GATEWAY_RECOVERY_RESTART_WAIT_SECONDS:-300}"
 recreate_wait_seconds="${IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS:-360}"
+lock_file="${IB_GATEWAY_RECOVERY_LOCK_FILE:-/var/lock/ib_gateway_recovery.lock}"
+lock_wait_seconds="${IB_GATEWAY_RECOVERY_LOCK_WAIT_SECONDS:-900}"
 
 cd "${repo_dir}"
+
+mkdir -p "$(dirname "${lock_file}")" 2>/dev/null || true
+exec 9>"${lock_file}"
+if [ "${lock_wait_seconds}" = "0" ]; then
+  if ! flock -n 9; then
+    echo "Another IB gateway recovery is already running; skipping this check."
+    exit 0
+  fi
+elif ! flock -w "${lock_wait_seconds}" 9; then
+  echo "Timed out waiting for IB gateway recovery lock: ${lock_file}" >&2
+  exit 1
+fi
+
+echo "Acquired IB gateway recovery lock: ${lock_file}"
 
 wait_for_ready() {
   local timeout_seconds="$1"
