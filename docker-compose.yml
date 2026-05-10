@@ -13,9 +13,13 @@ services:
       - READ_ONLY_API=${READ_ONLY_API:-no}
       # Keep IBC aligned with the upstream image defaults so paper/live
       # sessions recover after missed 2FA or stale-session prompts.
+      - TWOFA_DEVICE=${TWOFA_DEVICE:-}
       - TWOFA_TIMEOUT_ACTION=${TWOFA_TIMEOUT_ACTION:-restart}
       - RELOGIN_AFTER_TWOFA_TIMEOUT=${RELOGIN_AFTER_TWOFA_TIMEOUT:-yes}
       - EXISTING_SESSION_DETECTED_ACTION=${EXISTING_SESSION_DETECTED_ACTION:-primary}
+      # Set to no when IBC should use IBKR Mobile push approval instead of
+      # the local TOTP auto-fill helper.
+      - IBKR_2FA_AUTOFILL=${IBKR_2FA_AUTOFILL:-yes}
       # e2-micro has less than 1 GiB RAM. The upstream image defaults to
       # -Xmx768m, which can starve sshd/Docker/guest-agent. Keep this
       # configurable, but use a safer default for the current VM.
