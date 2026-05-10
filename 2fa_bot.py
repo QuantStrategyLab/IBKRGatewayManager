@@ -11,6 +11,12 @@ from typing import Optional
 # ================= Configuration =================
 SECRET_KEY = os.environ.get("TOTP_SECRET")
 X11_DISPLAY = os.environ.get("DISPLAY_NUM", ":1")
+AUTOFILL_ENABLED = os.environ.get("IBKR_2FA_AUTOFILL", "yes").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 
 # Timing constants (seconds)
 CHECK_INTERVAL = 3
@@ -72,6 +78,9 @@ class WindowCandidate:
 
 def validate_config():
     """Validate required config at startup; exit immediately if invalid."""
+    if not AUTOFILL_ENABLED:
+        log.info("TOTP auto-fill is disabled; bot will only log auth popup detection")
+        return
     if not SECRET_KEY:
         log.error("TOTP_SECRET not found in environment variables")
         sys.exit(1)
@@ -188,6 +197,16 @@ def focus_input_area(candidate):
 
 def submit_totp(candidate):
     """Submit a TOTP code to the selected authentication popup."""
+    if not AUTOFILL_ENABLED:
+        log.info(
+            "Authentication window found (id=%s, title=%r, size=%sx%s); auto-fill disabled",
+            candidate.window_id,
+            candidate.title,
+            candidate.width or "?",
+            candidate.height or "?",
+        )
+        return
+
     seconds_remaining = wait_for_fresh_totp_window()
     log.info(
         "Authentication window found (id=%s, title=%r, size=%sx%s); submitting code with %ss remaining",
