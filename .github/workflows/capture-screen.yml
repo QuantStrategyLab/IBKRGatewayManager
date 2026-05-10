@@ -122,8 +122,8 @@ jobs:
               fi
 
               geometry=$(xdotool getwindowgeometry --shell "$window_id")
-              width=$(printf "%s\n" "$geometry" | awk -F= "/^WIDTH=/{print \\$2}")
-              height=$(printf "%s\n" "$geometry" | awk -F= "/^HEIGHT=/{print \\$2}")
+              width=$(printf "%s\n" "$geometry" | sed -n "s/^WIDTH=//p")
+              height=$(printf "%s\n" "$geometry" | sed -n "s/^HEIGHT=//p")
               case "$screen_action" in
                 resend-notification)
                   click_x=$((width * 42 / 100))
