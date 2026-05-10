@@ -1,7 +1,11 @@
 name: Diagnose Gateway
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diagnose.yml'
+  workflow_dispatch: {}
 
 env:
   GCP_PROJECT_ID: interactivebrokersquant
