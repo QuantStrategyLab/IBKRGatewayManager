@@ -41,3 +41,5 @@ grep -Fq '      - JAVA_HEAP_SIZE=${JAVA_HEAP_SIZE:-512}' "$compose_file"
 grep -Fq '      - IB_GATEWAY_PARALLEL_GC_THREADS=${IB_GATEWAY_PARALLEL_GC_THREADS:-2}' "$compose_file"
 grep -Fq '      - IB_GATEWAY_CONC_GC_THREADS=${IB_GATEWAY_CONC_GC_THREADS:-1}' "$compose_file"
 grep -Fq '      - ACCEPT_API_FROM_IP=${ACCEPT_API_FROM_IP:?Set ACCEPT_API_FROM_IP to your Cloud Run egress subnet or connector CIDR}' "$compose_file"
+
+grep -Fq 'INPUT_CLICK_POSITION = (0.50, 0.40)' "$repo_dir/2fa_bot.py"
