@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - stop-2fa-bot
+          - restart-2fa-bot
 
 env:
   GCP_PROJECT_ID: interactivebrokersquant
@@ -93,6 +94,16 @@ jobs:
           sudo docker exec ib-gateway pkill -f 2fa_bot.py 2>/dev/null || true
           sudo docker exec ib-gateway pgrep -a -f 2fa_bot.py 2>/dev/null || echo "2FA bot stopped"
           sudo systemctl status ibkr-2fa-bot.timer ibkr-2fa-bot.service --no-pager || true
+          EOF
+              )
+              ;;
+            restart-2fa-bot)
+              REMOTE_COMMAND=$(cat <<'EOF'
+          set -euo pipefail
+          sudo docker exec ib-gateway pkill -f 2fa_bot.py 2>/dev/null || true
+          sudo /usr/local/bin/ensure-ibkr-2fa-bot-running
+          sudo docker exec ib-gateway pgrep -a -f 2fa_bot.py
+          sudo docker exec ib-gateway tail -n 40 /home/ibgateway/2fa.log 2>/dev/null || true
           EOF
               )
               ;;
