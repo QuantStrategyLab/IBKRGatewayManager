@@ -81,7 +81,7 @@ def find_and_fill():
             time.sleep(PRE_ENTER_DELAY)
             run_xdotool(f"xdotool key --window {window_id} Return")
 
-            log.info("Auto-fill successful: %s, waiting for gateway response...", code)
+            log.info("Auto-fill submitted, waiting for gateway response...")
             return True
     return False
 
