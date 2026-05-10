@@ -1,5 +1,12 @@
 # IBKR Gateway Manager
 
+[English](#english) | [中文](#中文)
+
+---
+
+<a id="english"></a>
+## English
+
 An automated deployment solution for IBKR Gateway on Google Compute Engine (GCE), with automated 2FA and daily reconnect.
 
 > ✅ Current target architecture: **Cloud Run → VPC private IP → GCE host port 4001/4002**.
@@ -297,5 +304,131 @@ docker exec ib-gateway sh -lc 'command -v ss >/dev/null && ss -lntp | grep -E "4
 ---
 
 ## License
+
+MIT
+
+---
+
+<a id="中文"></a>
+## 中文
+
+IBKR Gateway Manager 用于在 Google Compute Engine (GCE) 上自动部署和维护 IBKR Gateway，并提供自动 2FA、每日重连和 API readiness 检查。
+
+目标架构：
+
+```text
+Cloud Run service
+   │
+   ├─(egress: all-traffic/private-ranges-only)
+   ▼
+Direct VPC egress or Serverless VPC Access connector
+   ▼
+VPC (same region/network path)
+   ▼
+GCE VM (private IP, host port 4001/4002)
+   ▼
+Docker: ib-gateway container (relay on 4003/4004)
+```
+
+## 功能
+
+- **容器化部署**：基于 Docker / Docker Compose。
+- **自动 2FA**：Python bot 使用 `pyotp` 和 `xdotool` 自动填写 TOTP。
+- **每日自动重连**：通过 restart policy 提升长期运行稳定性。
+- **API 握手恢复**：systemd health check 验证 IB API handshake，API 未就绪时重启或重建容器。
+- **私网 API 访问**：把 IBKR API 暴露在 GCE 私网，供 Cloud Run 访问。
+
+## 快速开始
+
+### 1. 前置条件
+
+- 一台安装了 Docker 和 Docker Compose 的 Linux GCE VM。
+- 已启用 TOTP 2FA 的 IBKR 账户。
+- Cloud Run service 和 GCE VM 位于可互通的 VPC 网络路径。
+
+### 2. 配置 `.env`
+
+在 `docker-compose.yml` 旁创建 `.env`：
+
+```bash
+TWS_USERID=your_ibkr_username
+TWS_PASSWORD=your_ibkr_password
+TOTP_SECRET=your_base32_totp_secret
+VNC_SERVER_PASSWORD=your_vnc_password
+TRADING_MODE=live
+TWS_ACCEPT_INCOMING=accept
+READ_ONLY_API=no
+TWOFA_TIMEOUT_ACTION=restart
+RELOGIN_AFTER_TWOFA_TIMEOUT=yes
+EXISTING_SESSION_DETECTED_ACTION=primary
+JAVA_HEAP_SIZE=512
+
+ACCEPT_API_FROM_IP=10.8.0.0/26
+ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
+```
+
+`ACCEPT_API_FROM_IP` 应设置为 Cloud Run 出口路径使用的 CIDR：Direct VPC egress 通常使用 subnet CIDR，VPC connector 使用 connector CIDR。
+
+### 3. 启动 IBKR Gateway
+
+```bash
+docker compose up -d --build
+sudo bash ./scripts/install_2fa_bot_watcher.sh
+sudo bash ./scripts/install_gateway_health_watcher.sh
+```
+
+如果使用本仓库的 GitHub Actions workflow，推送部署相关变更到 `main` 会触发完整部署。每日计划任务只做轻量 keepalive 和 watcher check，不重建 Docker image。
+
+### 4. 在 GCE VM 上验证
+
+```bash
+docker compose ps
+ss -lntp | grep -E '4001|4002'
+sudo bash ./scripts/wait_for_ib_gateway_ready.sh paper
+```
+
+readiness 脚本检查真实 IB API handshake，而不仅仅是 TCP 端口是否打开，因此可以发现 Gateway 被登录/API prompt 卡住的情况。
+
+## Cloud Run 连通性检查
+
+1. Cloud Run 使用 Direct VPC egress 或 Serverless VPC Access connector。
+2. Cloud Run egress 配置正确，按网络设计选择 `all-traffic` 或 `private-ranges-only`。
+3. 防火墙允许 Direct VPC subnet CIDR 或 connector CIDR 访问 VM TCP `4001`（live）或 `4002`（paper）。
+4. 应用使用 `GCE_PRIVATE_IP:4001` 或 `GCE_PRIVATE_IP:4002` 连接 Gateway。
+
+## 运维命令
+
+查看 2FA bot 日志：
+
+```bash
+docker exec ib-gateway tail -f /home/ibgateway/2fa.log
+```
+
+检查 watcher timer：
+
+```bash
+systemctl status ibkr-2fa-bot.timer --no-pager
+systemctl status ibkr-gateway-healthcheck.timer --no-pager
+systemctl status ibkr-gateway-daily-restart.timer --no-pager
+```
+
+## 安全注意事项
+
+- 生产环境不要设置 `ACCEPT_API_FROM_IP=0.0.0.0/0`。
+- 防火墙 source 只允许 Cloud Run / VPC connector CIDR。
+- VNC (`5900`) 应限制为 localhost-bound 或只通过 tunnel 访问。
+
+## 故障排查
+
+如果 Cloud Run 无法连接 `GCE_PRIVATE_IP:4001` 或 `GCE_PRIVATE_IP:4002`：
+
+- 确认 VM firewall rule 允许 connector CIDR 访问 TCP 4001（live）或 TCP 4002（paper）。
+- 确认 `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no`。
+- 确认 `TWS_ACCEPT_INCOMING=accept`。
+- 如果策略需要下单，确认 `READ_ONLY_API=no`。
+- 确认 Docker published ports 是 `4001:4003` 和 `4002:4004`。
+- 确认应用在 live 使用 `4001`，paper 使用 `4002`。
+
+## 许可证
 
 MIT
