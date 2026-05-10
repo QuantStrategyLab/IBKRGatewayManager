@@ -64,6 +64,7 @@ start_vnc() {
 
 start_IBC() {
 	configure_ibc_login_dialog_timeout
+	configure_ibc_second_factor_exit_interval
 	echo ".> Starting IBC in ${TRADING_MODE} mode, with params:"
 	echo ".>		Version: ${TWS_MAJOR_VRSN}"
 	echo ".>		program: ${IBC_COMMAND:-gateway}"
@@ -83,8 +84,9 @@ start_IBC() {
 	echo "$_p" >"/tmp/pid_${TRADING_MODE}"
 }
 
-configure_ibc_login_dialog_timeout() {
-	local timeout="${IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT:-180}"
+set_ibc_config_value() {
+	local key="$1"
+	local value="$2"
 	local files=(
 		"${IBC_INI:-/home/ibgateway/ibc/config.ini}"
 		"/home/ibgateway/ibc/config.ini"
@@ -96,12 +98,22 @@ configure_ibc_login_dialog_timeout() {
 		if [ ! -f "$file" ]; then
 			continue
 		fi
-		if grep -Eq '^LoginDialogDisplayTimeout\s*=' "$file"; then
-			sed -i -E "s/^LoginDialogDisplayTimeout\s*=.*/LoginDialogDisplayTimeout=${timeout}/" "$file"
+		if grep -Eq "^${key}\\s*=" "$file"; then
+			sed -i -E "s/^${key}\\s*=.*/${key}=${value}/" "$file"
 		else
-			printf '\nLoginDialogDisplayTimeout=%s\n' "$timeout" >>"$file"
+			printf '\n%s=%s\n' "$key" "$value" >>"$file"
 		fi
 	done
+}
+
+configure_ibc_login_dialog_timeout() {
+	local timeout="${IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT:-180}"
+	set_ibc_config_value "LoginDialogDisplayTimeout" "$timeout"
+}
+
+configure_ibc_second_factor_exit_interval() {
+	local interval="${IBC_SECOND_FACTOR_AUTHENTICATION_EXIT_INTERVAL:-180}"
+	set_ibc_config_value "SecondFactorAuthenticationExitInterval" "$interval"
 }
 
 configure_ib_gateway_vmoptions() {
