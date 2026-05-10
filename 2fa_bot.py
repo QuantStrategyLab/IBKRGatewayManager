@@ -58,7 +58,10 @@ AUTH_TITLE_KEYWORDS = (
 IGNORED_TITLE_KEYWORDS = (
     "authenticating",
 )
-INPUT_CLICK_POSITION = (0.50, 0.62)
+# Current IBKR Gateway TOTP prompts place the code field in the upper half of
+# the compact dialog. Keep the click centered on the text field instead of the
+# button/link area below it.
+INPUT_CLICK_POSITION = (0.50, 0.40)
 # =================================================
 
 logging.basicConfig(
