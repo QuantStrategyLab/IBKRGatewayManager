@@ -98,7 +98,8 @@ jobs:
             --scp-flag="-o TCPKeepAlive=yes"
           )
 
-          remote_png="/tmp/ibkr-gateway-screen.png"
+          remote_xwd="/tmp/ibkr-gateway-screen.xwd"
+          local_xwd="$RUNNER_TEMP/ibkr-gateway-screen.xwd"
           local_png="$RUNNER_TEMP/ibkr-gateway-screen.png"
           REMOTE_COMMAND=$(cat <<'EOF'
           set -euo pipefail
@@ -106,9 +107,9 @@ jobs:
           sudo docker exec -u root ib-gateway bash -lc '
             set -euo pipefail
             export DEBIAN_FRONTEND=noninteractive
-            if ! command -v xdotool >/dev/null 2>&1 || ! command -v xwd >/dev/null 2>&1 || ! command -v xwdtopnm >/dev/null 2>&1 || ! command -v pnmtopng >/dev/null 2>&1; then
+            if ! command -v xdotool >/dev/null 2>&1 || ! command -v xwd >/dev/null 2>&1; then
               apt-get update
-              apt-get install -y --no-install-recommends xdotool x11-apps netpbm
+              apt-get install -y --no-install-recommends xdotool x11-apps
               apt-get clean
               rm -rf /var/lib/apt/lists/*
             fi
@@ -149,19 +150,22 @@ jobs:
               sleep 3
             fi
             xwd -root -silent -out /tmp/ibkr-gateway-screen.xwd
-            xwdtopnm /tmp/ibkr-gateway-screen.xwd | pnmtopng > /tmp/ibkr-gateway-screen.png
-            chmod 0644 /tmp/ibkr-gateway-screen.png
+            chmod 0644 /tmp/ibkr-gateway-screen.xwd
           '
-          sudo docker cp ib-gateway:/tmp/ibkr-gateway-screen.png /tmp/ibkr-gateway-screen.png
-          sudo chmod 0644 /tmp/ibkr-gateway-screen.png
-          ls -lh /tmp/ibkr-gateway-screen.png
+          sudo docker cp ib-gateway:/tmp/ibkr-gateway-screen.xwd /tmp/ibkr-gateway-screen.xwd
+          sudo chmod 0644 /tmp/ibkr-gateway-screen.xwd
+          ls -lh /tmp/ibkr-gateway-screen.xwd
           EOF
           )
           screen_action_quoted="$(printf '%q' "${SCREEN_ACTION:-capture-only}")"
           REMOTE_COMMAND="${REMOTE_COMMAND/__SCREEN_ACTION__/${screen_action_quoted}}"
 
           gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_COMMAND}"
-          gcloud compute scp "${REMOTE_TARGET}:${remote_png}" "${local_png}" "${SCP_FLAGS[@]}"
+          gcloud compute scp "${REMOTE_TARGET}:${remote_xwd}" "${local_xwd}" "${SCP_FLAGS[@]}"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends netpbm
+          xwdtopnm "${local_xwd}" | pnmtopng > "${local_png}"
+          ls -lh "${local_png}"
           echo "SCREENSHOT_PATH=${local_png}" >> "$GITHUB_ENV"
 
       - name: Upload screenshot
