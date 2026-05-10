@@ -5,6 +5,8 @@ import time
 import subprocess
 import os
 import sys
+from dataclasses import dataclass
+from typing import Optional
 
 # ================= Configuration =================
 SECRET_KEY = os.environ.get("TOTP_SECRET")
@@ -16,9 +18,40 @@ FILL_COOLDOWN = 60
 TYPE_DELAY_MS = 100
 PRE_ENTER_DELAY = 1
 XDOTOOL_TIMEOUT = 10
+MIN_TOTP_SECONDS_REMAINING = 8
 
-# Window titles to search for 2FA prompt
-SEARCH_TITLES = ["'Challenge'", "'Second Factor'", "'Security Code'", "'Enter Code'"]
+# Window titles to search for 2FA prompts. Live IBKR accounts can show mobile
+# push / IB Key wording instead of the shorter TOTP-oriented prompts.
+SEARCH_PATTERNS = [
+    "Second Factor",
+    "Challenge",
+    "Security Code",
+    "Enter Code",
+    "IBKR Mobile",
+    "IB Key",
+    "Two-Factor",
+    "Two Factor",
+    "Verification",
+    "Verify",
+    "Authentication",
+]
+AUTH_TITLE_KEYWORDS = (
+    "second factor",
+    "challenge",
+    "security code",
+    "enter code",
+    "ibkr mobile",
+    "ib key",
+    "two-factor",
+    "two factor",
+    "verification",
+    "verify",
+    "authentication",
+)
+IGNORED_TITLE_KEYWORDS = (
+    "authenticating",
+)
+INPUT_CLICK_POSITION = (0.50, 0.62)
 # =================================================
 
 logging.basicConfig(
@@ -27,6 +60,14 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("2fa_bot")
+
+
+@dataclass(frozen=True)
+class WindowCandidate:
+    window_id: str
+    title: str
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 
 def validate_config():
@@ -46,43 +87,137 @@ def get_totp():
     return pyotp.TOTP(SECRET_KEY).now()
 
 
-def run_xdotool(command):
+def totp_seconds_remaining():
+    return 30 - (int(time.time()) % 30)
+
+
+def run_xdotool(args, sensitive=False):
     """Execute xdotool command on the X11 display with timeout protection."""
     env = os.environ.copy()
     env["DISPLAY"] = X11_DISPLAY
+    command = ["xdotool", *args]
     try:
         return subprocess.run(
-            command, shell=True, env=env,
+            command, env=env,
             capture_output=True, text=True,
             timeout=XDOTOOL_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
-        log.warning("xdotool command timed out: %s", command)
+        display_command = "xdotool <redacted>" if sensitive else " ".join(command)
+        log.warning("xdotool command timed out: %s", display_command)
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="timeout")
 
 
+def get_window_title(window_id):
+    res = run_xdotool(["getwindowname", window_id])
+    return res.stdout.strip()
+
+
+def get_window_geometry(window_id):
+    res = run_xdotool(["getwindowgeometry", "--shell", window_id])
+    if res.returncode != 0:
+        return None, None
+
+    values = {}
+    for line in res.stdout.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key] = value
+
+    try:
+        return int(values.get("WIDTH", "")), int(values.get("HEIGHT", ""))
+    except ValueError:
+        return None, None
+
+
+def is_auth_candidate(title):
+    normalized_title = title.lower()
+    if any(keyword in normalized_title for keyword in IGNORED_TITLE_KEYWORDS):
+        return False
+    return any(keyword in normalized_title for keyword in AUTH_TITLE_KEYWORDS)
+
+
+def find_auth_windows():
+    """Find visible IBKR authentication windows without relying on focus state."""
+    window_ids = []
+    for pattern in SEARCH_PATTERNS:
+        res = run_xdotool(["search", "--name", pattern])
+        if res.returncode != 0:
+            continue
+        for window_id in res.stdout.splitlines():
+            if window_id and window_id not in window_ids:
+                window_ids.append(window_id)
+
+    candidates = []
+    for window_id in reversed(window_ids):
+        title = get_window_title(window_id)
+        if not is_auth_candidate(title):
+            continue
+        width, height = get_window_geometry(window_id)
+        candidates.append(WindowCandidate(window_id, title, width, height))
+    return candidates
+
+
+def wait_for_fresh_totp_window():
+    seconds_remaining = totp_seconds_remaining()
+    if seconds_remaining > MIN_TOTP_SECONDS_REMAINING:
+        return seconds_remaining
+
+    wait_seconds = seconds_remaining + 1
+    log.info(
+        "TOTP period has %ss remaining; waiting %ss before submitting a fresh code",
+        seconds_remaining,
+        wait_seconds,
+    )
+    time.sleep(wait_seconds)
+    return totp_seconds_remaining()
+
+
+def focus_input_area(candidate):
+    if not candidate.width or not candidate.height:
+        return
+
+    x = max(1, int(candidate.width * INPUT_CLICK_POSITION[0]))
+    y = max(1, int(candidate.height * INPUT_CLICK_POSITION[1]))
+    run_xdotool(["windowactivate", "--sync", candidate.window_id])
+    run_xdotool(["windowfocus", "--sync", candidate.window_id])
+    run_xdotool(["mousemove", "--window", candidate.window_id, str(x), str(y)])
+    run_xdotool(["click", "1"])
+
+
+def submit_totp(candidate):
+    """Submit a TOTP code to the selected authentication popup."""
+    seconds_remaining = wait_for_fresh_totp_window()
+    log.info(
+        "Authentication window found (id=%s, title=%r, size=%sx%s); submitting code with %ss remaining",
+        candidate.window_id,
+        candidate.title,
+        candidate.width or "?",
+        candidate.height or "?",
+        seconds_remaining,
+    )
+
+    focus_input_area(candidate)
+    code = get_totp()
+
+    run_xdotool(["key", "--window", candidate.window_id, "ctrl+a", "BackSpace"])
+    run_xdotool(
+        ["type", "--window", candidate.window_id, "--delay", str(TYPE_DELAY_MS), code],
+        sensitive=True,
+    )
+    time.sleep(PRE_ENTER_DELAY)
+    run_xdotool(["key", "--window", candidate.window_id, "Return"])
+
+    log.info("Auto-fill submitted, waiting for gateway response...")
+
+
 def find_and_fill():
-    """Search for the IBKR Gateway login window and auto-fill the code."""
-    for title in SEARCH_TITLES:
-        res = run_xdotool(f"xdotool search --name {title}")
-        window_id = res.stdout.strip()
-
-        if window_id:
-            window_id = window_id.split('\n')[-1]
-            log.info("Verification window found (ID: %s), filling code...", window_id)
-
-            run_xdotool(f"xdotool windowactivate --sync {window_id}")
-            run_xdotool(f"xdotool windowfocus --sync {window_id}")
-
-            code = get_totp()
-
-            run_xdotool(f"xdotool key --window {window_id} ctrl+a BackSpace")
-            run_xdotool(f"xdotool type --delay {TYPE_DELAY_MS} '{code}'")
-            time.sleep(PRE_ENTER_DELAY)
-            run_xdotool(f"xdotool key --window {window_id} Return")
-
-            log.info("Auto-fill submitted, waiting for gateway response...")
-            return True
+    """Search for the IBKR Gateway authentication window and auto-fill the code."""
+    candidates = find_auth_windows()
+    for candidate in candidates:
+        submit_totp(candidate)
+        return True
     return False
 
 
