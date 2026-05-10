@@ -1,0 +1,137 @@
+name: Diagnose Gateway
+
+on:
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: interactivebrokersquant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/303168642265/locations/global/workloadIdentityPools/github-actions/providers/github-ibkr-gateway-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ibkr-gateway-deploy@interactivebrokersquant.iam.gserviceaccount.com
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCE_USER: ${{ vars.IB_GATEWAY_GCE_USER }}
+      GCE_INSTANCE_NAME: ${{ vars.IB_GATEWAY_INSTANCE_NAME }}
+      GCE_ZONE: ${{ vars.IB_GATEWAY_ZONE }}
+      DEPLOY_PATH: ${{ vars.IB_GATEWAY_DEPLOY_PATH }}
+      SSH_PRIVATE_KEY_SECRET_NAME: ${{ vars.IB_GATEWAY_SSH_PRIVATE_KEY_SECRET_NAME }}
+    steps:
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Prepare SSH key
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SSH_PRIVATE_KEY_SECRET_NAME:-}" ]; then
+            echo "SSH_PRIVATE_KEY_SECRET_NAME is required." >&2
+            exit 1
+          fi
+
+          install -d -m 700 "$RUNNER_TEMP/ssh"
+          SSH_KEY_FILE="$RUNNER_TEMP/ssh/google_compute_engine"
+          gcloud secrets versions access latest \
+            --project "${GCP_PROJECT_ID}" \
+            --secret "${SSH_PRIVATE_KEY_SECRET_NAME}" | tr -d '\r' > "$SSH_KEY_FILE"
+          chmod 600 "$SSH_KEY_FILE"
+          ssh-keygen -y -f "$SSH_KEY_FILE" > "$SSH_KEY_FILE.pub"
+          chmod 644 "$SSH_KEY_FILE.pub"
+          echo "SSH_KEY_FILE=$SSH_KEY_FILE" >> "$GITHUB_ENV"
+
+      - name: Collect remote diagnostics
+        run: |
+          set -euo pipefail
+
+          for var_name in GCE_USER GCE_INSTANCE_NAME GCE_ZONE DEPLOY_PATH; do
+            if [ -z "${!var_name:-}" ]; then
+              echo "${var_name} is required." >&2
+              exit 1
+            fi
+          done
+
+          REMOTE_TARGET="${GCE_USER}@${GCE_INSTANCE_NAME}"
+          SSH_FLAGS=(
+            --project "${GCP_PROJECT_ID}"
+            --zone "${GCE_ZONE}"
+            --quiet
+            --tunnel-through-iap
+            --ssh-key-file "${SSH_KEY_FILE}"
+            --ssh-flag="-o ServerAliveInterval=30"
+            --ssh-flag="-o ServerAliveCountMax=4"
+            --ssh-flag="-o TCPKeepAlive=yes"
+          )
+
+          REMOTE_DIAG_COMMAND=$(cat <<'EOF'
+          set -euo pipefail
+          cd __DEPLOY_PATH__
+
+          section() {
+            printf '\n===== %s =====\n' "$1"
+          }
+
+          section "safe env"
+          if [ -f .env ]; then
+            grep -E '^(TRADING_MODE|ACCEPT_API_FROM_IP|ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY|TWS_ACCEPT_INCOMING|READ_ONLY_API|TWOFA_TIMEOUT_ACTION|RELOGIN_AFTER_TWOFA_TIMEOUT|EXISTING_SESSION_DETECTED_ACTION|LOGIN_TIMEOUT|JAVA_HEAP_SIZE)=' .env || true
+          else
+            echo ".env missing"
+          fi
+
+          section "docker compose ps"
+          sudo docker compose ps || true
+
+          section "host listening ports"
+          sudo ss -ltnp | grep -E ':(4001|4002|4003|4004|5900)\b' || true
+
+          section "2fa watcher systemd"
+          sudo systemctl status ibkr-2fa-bot.timer ibkr-2fa-bot.service --no-pager || true
+
+          section "2fa watcher journal"
+          sudo journalctl -u ibkr-2fa-bot.service -n 100 --no-pager || true
+
+          section "container processes"
+          sudo docker exec ib-gateway bash -lc 'pgrep -a -f "2fa_bot.py|ibgateway|socat|Xvfb|x11vnc|ibcstart" || true' || true
+
+          section "container listening ports"
+          sudo docker exec ib-gateway bash -lc 'ss -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || netstat -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || true' || true
+
+          section "x11 windows"
+          sudo docker exec ib-gateway bash -lc '
+            export DISPLAY=:1
+            ids=$(xdotool search --name ".*" 2>/dev/null || true)
+            if [ -z "$ids" ]; then
+              echo "no x11 windows found"
+            else
+              for id in $ids; do
+                printf "%s " "$id"
+                xdotool getwindowname "$id" 2>/dev/null || true
+              done
+            fi
+          ' || true
+
+          section "2fa bot log"
+          sudo docker exec ib-gateway bash -lc 'tail -n 160 /home/ibgateway/2fa.log 2>/dev/null || echo "2fa.log missing"' || true
+
+          section "ib gateway docker log"
+          sudo docker logs --tail 220 ib-gateway 2>&1 || true
+          EOF
+          )
+          deploy_path_quoted="$(printf '%q' "${DEPLOY_PATH}")"
+          REMOTE_DIAG_COMMAND="${REMOTE_DIAG_COMMAND/__DEPLOY_PATH__/${deploy_path_quoted}}"
+
+          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DIAG_COMMAND}"
