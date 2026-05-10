@@ -142,7 +142,8 @@ jobs:
                   exit 1
                   ;;
               esac
-              xdotool windowactivate --sync "$window_id"
+              xdotool windowactivate --sync "$window_id" || true
+              xdotool windowfocus "$window_id" || true
               xdotool mousemove --window "$window_id" "$click_x" "$click_y"
               xdotool click 1
               sleep 3
