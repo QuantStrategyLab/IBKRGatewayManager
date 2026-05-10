@@ -36,6 +36,7 @@ grep -Fq '      - TWOFA_TIMEOUT_ACTION=${TWOFA_TIMEOUT_ACTION:-restart}' "$compo
 grep -Fq '      - RELOGIN_AFTER_TWOFA_TIMEOUT=${RELOGIN_AFTER_TWOFA_TIMEOUT:-yes}' "$compose_file"
 grep -Fq '      - EXISTING_SESSION_DETECTED_ACTION=${EXISTING_SESSION_DETECTED_ACTION:-primary}' "$compose_file"
 grep -Fq '      - IBKR_2FA_AUTOFILL=${IBKR_2FA_AUTOFILL:-yes}' "$compose_file"
+grep -Fq '      - IBKR_2FA_MAX_SUBMISSIONS=${IBKR_2FA_MAX_SUBMISSIONS:-1}' "$compose_file"
 grep -Fq '      - JAVA_HEAP_SIZE=${JAVA_HEAP_SIZE:-512}' "$compose_file"
 grep -Fq '      - IB_GATEWAY_PARALLEL_GC_THREADS=${IB_GATEWAY_PARALLEL_GC_THREADS:-2}' "$compose_file"
 grep -Fq '      - IB_GATEWAY_CONC_GC_THREADS=${IB_GATEWAY_CONC_GC_THREADS:-1}' "$compose_file"

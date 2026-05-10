@@ -66,11 +66,12 @@ VNC_SERVER_PASSWORD=your_vnc_password
 TRADING_MODE=live
 TWS_ACCEPT_INCOMING=accept
 READ_ONLY_API=no
-TWOFA_DEVICE=IB Key
+TWOFA_DEVICE=Mobile Authenticator app
 TWOFA_TIMEOUT_ACTION=restart
 RELOGIN_AFTER_TWOFA_TIMEOUT=yes
 EXISTING_SESSION_DETECTED_ACTION=primary
 IBKR_2FA_AUTOFILL=no
+IBKR_2FA_MAX_SUBMISSIONS=1
 JAVA_HEAP_SIZE=512
 
 # Recommended: use the exact CIDR used by your Cloud Run egress path
@@ -96,7 +97,7 @@ IB_GATEWAY_DEPLOY_PATH=/home/zwlddx0815/ib-docker
 IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
 IB_GATEWAY_TWS_ACCEPT_INCOMING=accept
 IB_GATEWAY_READ_ONLY_API=no
-IB_GATEWAY_TWOFA_DEVICE=IB Key
+IB_GATEWAY_TWOFA_DEVICE=Mobile Authenticator app
 IB_GATEWAY_2FA_AUTOFILL=no
 ```
 
@@ -211,8 +212,9 @@ If you temporarily keep the values in GitHub Secrets during migration, you can r
 | `IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY` | Set to `no` for Cloud Run private IP access |
 | `IB_GATEWAY_TWS_ACCEPT_INCOMING` | Optional. Recommended `accept`. |
 | `IB_GATEWAY_READ_ONLY_API` | Optional. Recommended `no` if this service places trades. |
-| `IB_GATEWAY_TWOFA_DEVICE` | Optional. Exact IBC 2FA device name, for example `IB Key` for IBKR Mobile push. |
-| `IB_GATEWAY_2FA_AUTOFILL` | Optional. Set to `no` when using IBKR Mobile push instead of local TOTP auto-fill. |
+| `IB_GATEWAY_TWOFA_DEVICE` | Optional. Exact IBC 2FA device name, for example `Mobile Authenticator app` for the authenticator-code prompt or `IB Key` for IBKR Mobile push. |
+| `IB_GATEWAY_2FA_AUTOFILL` | Optional. Set to `no` while validating the configured TOTP secret or when using IBKR Mobile push instead of local TOTP auto-fill. |
+| `IBKR_2FA_MAX_SUBMISSIONS` | Optional container env. Defaults to `1` so an invalid TOTP secret does not keep submitting codes. |
 
 The current VM is an `e2-micro`, so the deployment intentionally sets `JAVA_HEAP_SIZE=512`
 by default and enables a 2 GiB host swap file during keepalive/deploy. Without this,
@@ -366,11 +368,12 @@ VNC_SERVER_PASSWORD=your_vnc_password
 TRADING_MODE=live
 TWS_ACCEPT_INCOMING=accept
 READ_ONLY_API=no
-TWOFA_DEVICE=IB Key
+TWOFA_DEVICE=Mobile Authenticator app
 TWOFA_TIMEOUT_ACTION=restart
 RELOGIN_AFTER_TWOFA_TIMEOUT=yes
 EXISTING_SESSION_DETECTED_ACTION=primary
 IBKR_2FA_AUTOFILL=no
+IBKR_2FA_MAX_SUBMISSIONS=1
 JAVA_HEAP_SIZE=512
 
 ACCEPT_API_FROM_IP=10.8.0.0/26
