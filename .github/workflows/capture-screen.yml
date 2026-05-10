@@ -2,6 +2,17 @@ name: Capture Gateway Screen
 
 on:
   workflow_dispatch:
+    inputs:
+      screen_action:
+        description: Optional interaction before capturing the screen
+        required: false
+        default: capture-only
+        type: choice
+        options:
+          - capture-only
+          - resend-notification
+          - challenge-response
+          - qr-code
 
 env:
   GCP_PROJECT_ID: interactivebrokersquant
@@ -20,6 +31,7 @@ jobs:
       GCE_INSTANCE_NAME: ${{ vars.IB_GATEWAY_INSTANCE_NAME }}
       GCE_ZONE: ${{ vars.IB_GATEWAY_ZONE }}
       SSH_PRIVATE_KEY_SECRET_NAME: ${{ vars.IB_GATEWAY_SSH_PRIVATE_KEY_SECRET_NAME }}
+      SCREEN_ACTION: ${{ github.event.inputs.screen_action }}
     steps:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -94,13 +106,47 @@ jobs:
           sudo docker exec -u root ib-gateway bash -lc '
             set -euo pipefail
             export DEBIAN_FRONTEND=noninteractive
-            if ! command -v xwd >/dev/null 2>&1 || ! command -v xwdtopnm >/dev/null 2>&1 || ! command -v pnmtopng >/dev/null 2>&1; then
+            if ! command -v xdotool >/dev/null 2>&1 || ! command -v xwd >/dev/null 2>&1 || ! command -v xwdtopnm >/dev/null 2>&1 || ! command -v pnmtopng >/dev/null 2>&1; then
               apt-get update
-              apt-get install -y --no-install-recommends x11-apps netpbm
+              apt-get install -y --no-install-recommends xdotool x11-apps netpbm
               apt-get clean
               rm -rf /var/lib/apt/lists/*
             fi
             export DISPLAY=:1
+            screen_action=__SCREEN_ACTION__
+            if [ "$screen_action" != "capture-only" ]; then
+              window_id=$(xdotool search --name "Second Factor Authentication" 2>/dev/null | tail -n 1 || true)
+              if [ -z "$window_id" ]; then
+                echo "Second Factor Authentication window not found." >&2
+                exit 1
+              fi
+
+              geometry=$(xdotool getwindowgeometry --shell "$window_id")
+              width=$(printf "%s\n" "$geometry" | awk -F= "/^WIDTH=/{print \\$2}")
+              height=$(printf "%s\n" "$geometry" | awk -F= "/^HEIGHT=/{print \\$2}")
+              case "$screen_action" in
+                resend-notification)
+                  click_x=$((width * 42 / 100))
+                  click_y=$((height * 78 / 100))
+                  ;;
+                challenge-response)
+                  click_x=$((width * 48 / 100))
+                  click_y=$((height * 83 / 100))
+                  ;;
+                qr-code)
+                  click_x=$((width * 42 / 100))
+                  click_y=$((height * 87 / 100))
+                  ;;
+                *)
+                  echo "Unsupported screen action: $screen_action" >&2
+                  exit 1
+                  ;;
+              esac
+              xdotool windowactivate --sync "$window_id"
+              xdotool mousemove --window "$window_id" "$click_x" "$click_y"
+              xdotool click 1
+              sleep 3
+            fi
             xwd -root -silent -out /tmp/ibkr-gateway-screen.xwd
             xwdtopnm /tmp/ibkr-gateway-screen.xwd | pnmtopng > /tmp/ibkr-gateway-screen.png
             chmod 0644 /tmp/ibkr-gateway-screen.png
@@ -110,6 +156,8 @@ jobs:
           ls -lh /tmp/ibkr-gateway-screen.png
           EOF
           )
+          screen_action_quoted="$(printf '%q' "${SCREEN_ACTION:-capture-only}")"
+          REMOTE_COMMAND="${REMOTE_COMMAND/__SCREEN_ACTION__/${screen_action_quoted}}"
 
           gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_COMMAND}"
           gcloud compute scp "${REMOTE_TARGET}:${remote_png}" "${local_png}" "${SCP_FLAGS[@]}"
