@@ -101,15 +101,15 @@ jobs:
           date -u || true
           sudo docker exec ib-gateway bash -lc 'date -u || true' || true
           sudo docker exec ib-gateway bash -lc 'python3 - <<'"'"'PY'"'"'
-import os
-import time
+          import os
+          import time
 
-print("container_epoch", int(time.time()))
-if os.environ.get("TOTP_SECRET"):
-    print("totp_seconds_remaining", 30 - (int(time.time()) % 30))
-else:
-    print("totp_secret_present", False)
-PY' || true
+          print("container_epoch", int(time.time()))
+          if os.environ.get("TOTP_SECRET"):
+              print("totp_seconds_remaining", 30 - (int(time.time()) % 30))
+          else:
+              print("totp_secret_present", False)
+          PY' || true
 
           section "docker compose ps"
           sudo docker compose ps || true
