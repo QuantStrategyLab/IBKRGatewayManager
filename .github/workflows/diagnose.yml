@@ -93,6 +93,20 @@ jobs:
             echo ".env missing"
           fi
 
+          section "clock"
+          date -u || true
+          sudo docker exec ib-gateway bash -lc 'date -u || true' || true
+          sudo docker exec ib-gateway bash -lc 'python3 - <<'"'"'PY'"'"'
+import os
+import time
+
+print("container_epoch", int(time.time()))
+if os.environ.get("TOTP_SECRET"):
+    print("totp_seconds_remaining", 30 - (int(time.time()) % 30))
+else:
+    print("totp_secret_present", False)
+PY' || true
+
           section "docker compose ps"
           sudo docker compose ps || true
 
@@ -121,7 +135,14 @@ jobs:
               for id in $ids; do
                 printf "%s " "$id"
                 xdotool getwindowname "$id" 2>/dev/null || true
+                timeout 3 xdotool getwindowgeometry --shell "$id" 2>/dev/null || true
+                timeout 3 xprop -id "$id" WM_NAME WM_CLASS WM_WINDOW_ROLE 2>/dev/null || true
               done
+            fi
+            focused=$(xdotool getwindowfocus 2>/dev/null || true)
+            if [ -n "$focused" ]; then
+              printf "focused %s " "$focused"
+              xdotool getwindowname "$focused" 2>/dev/null || true
             fi
           ' || true
 
