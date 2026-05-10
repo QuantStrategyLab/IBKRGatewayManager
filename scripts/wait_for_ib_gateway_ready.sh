@@ -32,6 +32,7 @@ check_api_handshake() {
 import os
 import socket
 import struct
+import sys
 import time
 
 
@@ -51,16 +52,24 @@ except ImportError:
 if IB is not None:
     ib = IB()
     try:
-        ib.connect(host, port, clientId=client_id, timeout=timeout_seconds)
-        accounts = ib.managedAccounts()
-        if not accounts:
-            raise RuntimeError("IB API healthcheck did not receive managed accounts")
-        print(
-            "IB API ib_insync healthcheck ready: "
-            f"server_version={ib.client.serverVersion()} "
-            f"client_id={client_id} "
-            f"accounts={','.join(accounts)}"
-        )
+        try:
+            ib.connect(host, port, clientId=client_id, timeout=timeout_seconds)
+            accounts = ib.managedAccounts()
+            if not accounts:
+                raise RuntimeError("IB API healthcheck did not receive managed accounts")
+            print(
+                "IB API ib_insync healthcheck ready: "
+                f"server_version={ib.client.serverVersion()} "
+                f"client_id={client_id} "
+                f"accounts={','.join(accounts)}"
+            )
+        except Exception as exc:
+            print(
+                "IB API ib_insync healthcheck not ready: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
     finally:
         if ib.isConnected():
             ib.disconnect()
