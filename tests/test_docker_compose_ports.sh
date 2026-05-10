@@ -43,3 +43,5 @@ grep -Fq '      - IB_GATEWAY_CONC_GC_THREADS=${IB_GATEWAY_CONC_GC_THREADS:-1}' "
 grep -Fq '      - ACCEPT_API_FROM_IP=${ACCEPT_API_FROM_IP:?Set ACCEPT_API_FROM_IP to your Cloud Run egress subnet or connector CIDR}' "$compose_file"
 
 grep -Fq 'INPUT_CLICK_POSITION = (0.50, 0.40)' "$repo_dir/2fa_bot.py"
+grep -Fq 'MIN_TOTP_SECONDS_REMAINING = 15' "$repo_dir/2fa_bot.py"
+grep -Fq 'def type_totp_into_active_window(code):' "$repo_dir/2fa_bot.py"
