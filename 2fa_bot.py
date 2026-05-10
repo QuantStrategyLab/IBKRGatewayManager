@@ -25,6 +25,7 @@ TYPE_DELAY_MS = 100
 PRE_ENTER_DELAY = 1
 XDOTOOL_TIMEOUT = 10
 MIN_TOTP_SECONDS_REMAINING = 8
+MAX_AUTOFILL_SUBMISSIONS_RAW = os.environ.get("IBKR_2FA_MAX_SUBMISSIONS", "1")
 
 # Window titles to search for 2FA prompts. Live IBKR accounts can show mobile
 # push / IB Key wording instead of the shorter TOTP-oriented prompts.
@@ -66,6 +67,13 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("2fa_bot")
+try:
+    MAX_AUTOFILL_SUBMISSIONS = int(MAX_AUTOFILL_SUBMISSIONS_RAW)
+except ValueError:
+    log.error("IBKR_2FA_MAX_SUBMISSIONS must be an integer")
+    sys.exit(1)
+autofill_submission_count = 0
+autofill_limit_warned = False
 
 
 @dataclass(frozen=True)
@@ -81,6 +89,9 @@ def validate_config():
     if not AUTOFILL_ENABLED:
         log.info("TOTP auto-fill is disabled; bot will only log auth popup detection")
         return
+    if MAX_AUTOFILL_SUBMISSIONS < 1:
+        log.error("IBKR_2FA_MAX_SUBMISSIONS must be at least 1")
+        sys.exit(1)
     if not SECRET_KEY:
         log.error("TOTP_SECRET not found in environment variables")
         sys.exit(1)
@@ -197,6 +208,9 @@ def focus_input_area(candidate):
 
 def submit_totp(candidate):
     """Submit a TOTP code to the selected authentication popup."""
+    global autofill_limit_warned
+    global autofill_submission_count
+
     if not AUTOFILL_ENABLED:
         log.info(
             "Authentication window found (id=%s, title=%r, size=%sx%s); auto-fill disabled",
@@ -205,6 +219,16 @@ def submit_totp(candidate):
             candidate.width or "?",
             candidate.height or "?",
         )
+        return
+
+    if autofill_submission_count >= MAX_AUTOFILL_SUBMISSIONS:
+        if not autofill_limit_warned:
+            log.warning(
+                "Authentication window found but auto-fill submission limit reached "
+                "(limit=%s); leaving window for manual handling",
+                MAX_AUTOFILL_SUBMISSIONS,
+            )
+            autofill_limit_warned = True
         return
 
     seconds_remaining = wait_for_fresh_totp_window()
@@ -228,6 +252,7 @@ def submit_totp(candidate):
     time.sleep(PRE_ENTER_DELAY)
     run_xdotool(["key", "--window", candidate.window_id, "Return"])
 
+    autofill_submission_count += 1
     log.info("Auto-fill submitted, waiting for gateway response...")
 
 
