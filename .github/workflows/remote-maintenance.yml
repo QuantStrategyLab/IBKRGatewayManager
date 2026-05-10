@@ -1,0 +1,105 @@
+name: Remote Gateway Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Maintenance action to run on the gateway VM
+        required: true
+        default: stop-2fa-bot
+        type: choice
+        options:
+          - stop-2fa-bot
+
+env:
+  GCP_PROJECT_ID: interactivebrokersquant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/303168642265/locations/global/workloadIdentityPools/github-actions/providers/github-ibkr-gateway-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ibkr-gateway-deploy@interactivebrokersquant.iam.gserviceaccount.com
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCE_USER: ${{ vars.IB_GATEWAY_GCE_USER }}
+      GCE_INSTANCE_NAME: ${{ vars.IB_GATEWAY_INSTANCE_NAME }}
+      GCE_ZONE: ${{ vars.IB_GATEWAY_ZONE }}
+      SSH_PRIVATE_KEY_SECRET_NAME: ${{ vars.IB_GATEWAY_SSH_PRIVATE_KEY_SECRET_NAME }}
+      MAINTENANCE_ACTION: ${{ github.event.inputs.action }}
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Prepare SSH key
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SSH_PRIVATE_KEY_SECRET_NAME:-}" ]; then
+            echo "SSH_PRIVATE_KEY_SECRET_NAME is required." >&2
+            exit 1
+          fi
+
+          install -d -m 700 "$RUNNER_TEMP/ssh"
+          SSH_KEY_FILE="$RUNNER_TEMP/ssh/google_compute_engine"
+          ssh_private_key="$(gcloud secrets versions access latest \
+            --project "${GCP_PROJECT_ID}" \
+            --secret "${SSH_PRIVATE_KEY_SECRET_NAME}")"
+          printf '%s\n' "$ssh_private_key" | tr -d '\r' > "$SSH_KEY_FILE"
+          chmod 600 "$SSH_KEY_FILE"
+          ssh-keygen -y -f "$SSH_KEY_FILE" > "$SSH_KEY_FILE.pub"
+          chmod 644 "$SSH_KEY_FILE.pub"
+          echo "SSH_KEY_FILE=$SSH_KEY_FILE" >> "$GITHUB_ENV"
+
+      - name: Run maintenance action
+        run: |
+          set -euo pipefail
+
+          for var_name in GCE_USER GCE_INSTANCE_NAME GCE_ZONE; do
+            if [ -z "${!var_name:-}" ]; then
+              echo "${var_name} is required." >&2
+              exit 1
+            fi
+          done
+
+          REMOTE_TARGET="${GCE_USER}@${GCE_INSTANCE_NAME}"
+          SSH_FLAGS=(
+            --project "${GCP_PROJECT_ID}"
+            --zone "${GCE_ZONE}"
+            --quiet
+            --tunnel-through-iap
+            --ssh-key-file "${SSH_KEY_FILE}"
+            --ssh-flag="-o ServerAliveInterval=30"
+            --ssh-flag="-o ServerAliveCountMax=4"
+            --ssh-flag="-o TCPKeepAlive=yes"
+          )
+
+          case "${MAINTENANCE_ACTION}" in
+            stop-2fa-bot)
+              REMOTE_COMMAND=$(cat <<'EOF'
+          set -euo pipefail
+          sudo systemctl stop ibkr-2fa-bot.timer ibkr-2fa-bot.service 2>/dev/null || true
+          sudo docker exec ib-gateway pkill -f 2fa_bot.py 2>/dev/null || true
+          sudo docker exec ib-gateway pgrep -a -f 2fa_bot.py 2>/dev/null || echo "2FA bot stopped"
+          sudo systemctl status ibkr-2fa-bot.timer ibkr-2fa-bot.service --no-pager || true
+          EOF
+              )
+              ;;
+            *)
+              echo "Unsupported maintenance action: ${MAINTENANCE_ACTION}" >&2
+              exit 1
+              ;;
+          esac
+
+          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_COMMAND}"
