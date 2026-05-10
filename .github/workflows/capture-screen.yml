@@ -13,6 +13,11 @@ on:
           - resend-notification
           - challenge-response
           - qr-code
+      wait_for_second_factor:
+        description: Wait for the Second Factor Authentication window before capturing
+        required: false
+        default: false
+        type: boolean
 
 env:
   GCP_PROJECT_ID: interactivebrokersquant
@@ -32,6 +37,7 @@ jobs:
       GCE_ZONE: ${{ vars.IB_GATEWAY_ZONE }}
       SSH_PRIVATE_KEY_SECRET_NAME: ${{ vars.IB_GATEWAY_SSH_PRIVATE_KEY_SECRET_NAME }}
       SCREEN_ACTION: ${{ github.event.inputs.screen_action }}
+      WAIT_FOR_SECOND_FACTOR: ${{ github.event.inputs.wait_for_second_factor }}
     steps:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -115,8 +121,26 @@ jobs:
             fi
             export DISPLAY=:1
             screen_action=__SCREEN_ACTION__
+            wait_for_second_factor=__WAIT_FOR_SECOND_FACTOR__
+            window_id=""
+            if [ "$wait_for_second_factor" = "true" ]; then
+              deadline=$((SECONDS + 120))
+              while [ "$SECONDS" -lt "$deadline" ]; do
+                window_id=$(xdotool search --name "Second Factor Authentication" 2>/dev/null | tail -n 1 || true)
+                if [ -n "$window_id" ]; then
+                  break
+                fi
+                sleep 2
+              done
+              if [ -z "$window_id" ]; then
+                echo "Second Factor Authentication window not found before timeout." >&2
+                exit 1
+              fi
+            fi
             if [ "$screen_action" != "capture-only" ]; then
-              window_id=$(xdotool search --name "Second Factor Authentication" 2>/dev/null | tail -n 1 || true)
+              if [ -z "$window_id" ]; then
+                window_id=$(xdotool search --name "Second Factor Authentication" 2>/dev/null | tail -n 1 || true)
+              fi
               if [ -z "$window_id" ]; then
                 echo "Second Factor Authentication window not found." >&2
                 exit 1
@@ -149,7 +173,11 @@ jobs:
               xdotool click 1
               sleep 3
             fi
-            xwd -root -silent -out /tmp/ibkr-gateway-screen.xwd
+            if [ -n "$window_id" ]; then
+              xwd -id "$window_id" -silent -out /tmp/ibkr-gateway-screen.xwd
+            else
+              xwd -root -silent -out /tmp/ibkr-gateway-screen.xwd
+            fi
             chmod 0644 /tmp/ibkr-gateway-screen.xwd
           '
           sudo docker cp ib-gateway:/tmp/ibkr-gateway-screen.xwd /tmp/ibkr-gateway-screen.xwd
@@ -159,6 +187,8 @@ jobs:
           )
           screen_action_quoted="$(printf '%q' "${SCREEN_ACTION:-capture-only}")"
           REMOTE_COMMAND="${REMOTE_COMMAND/__SCREEN_ACTION__/${screen_action_quoted}}"
+          wait_for_second_factor_quoted="$(printf '%q' "${WAIT_FOR_SECOND_FACTOR:-false}")"
+          REMOTE_COMMAND="${REMOTE_COMMAND/__WAIT_FOR_SECOND_FACTOR__/${wait_for_second_factor_quoted}}"
 
           gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_COMMAND}"
           gcloud compute scp "${REMOTE_TARGET}:${remote_xwd}" "${local_xwd}" "${SCP_FLAGS[@]}"
