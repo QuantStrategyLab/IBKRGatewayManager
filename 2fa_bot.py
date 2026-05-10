@@ -24,7 +24,7 @@ FILL_COOLDOWN = 60
 TYPE_DELAY_MS = 100
 PRE_ENTER_DELAY = 1
 XDOTOOL_TIMEOUT = 10
-MIN_TOTP_SECONDS_REMAINING = 8
+MIN_TOTP_SECONDS_REMAINING = 15
 MAX_AUTOFILL_SUBMISSIONS_RAW = os.environ.get("IBKR_2FA_MAX_SUBMISSIONS", "1")
 
 # Window titles to search for 2FA prompts. Live IBKR accounts can show mobile
@@ -207,6 +207,15 @@ def focus_input_area(candidate):
     run_xdotool(["windowfocus", "--sync", candidate.window_id])
     run_xdotool(["mousemove", "--window", candidate.window_id, str(x), str(y)])
     run_xdotool(["click", "1"])
+    time.sleep(0.2)
+
+
+def type_totp_into_active_window(code):
+    """Type into the focused control; Java dialogs can ignore direct window events."""
+    run_xdotool(["key", "ctrl+a", "BackSpace"])
+    run_xdotool(["type", "--delay", str(TYPE_DELAY_MS), code], sensitive=True)
+    time.sleep(PRE_ENTER_DELAY)
+    run_xdotool(["key", "Return"])
 
 
 def submit_totp(candidate):
@@ -246,14 +255,7 @@ def submit_totp(candidate):
 
     focus_input_area(candidate)
     code = get_totp()
-
-    run_xdotool(["key", "--window", candidate.window_id, "ctrl+a", "BackSpace"])
-    run_xdotool(
-        ["type", "--window", candidate.window_id, "--delay", str(TYPE_DELAY_MS), code],
-        sensitive=True,
-    )
-    time.sleep(PRE_ENTER_DELAY)
-    run_xdotool(["key", "--window", candidate.window_id, "Return"])
+    type_totp_into_active_window(code)
 
     autofill_submission_count += 1
     log.info("Auto-fill submitted, waiting for gateway response...")
