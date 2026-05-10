@@ -26,6 +26,9 @@ grep -Fq 'flock -w "${lock_wait_seconds}" 9' "$recover_script"
 grep -Fq 'docker compose restart "${container_name}"' "$recover_script"
 grep -Fq 'docker compose up -d --force-recreate --no-build "${container_name}"' "$recover_script"
 grep -Fq 'IB_GATEWAY_READY_TIMEOUT_SECONDS="${timeout_seconds}"' "$recover_script"
+grep -Fq 'CONTAINER_NAME="${container_name}" bash "${script_dir}/ensure_2fa_bot_running.sh"' "$recover_script"
+ensure_count="$(grep -c 'ensure_2fa_bot_running' "$recover_script")"
+test "$ensure_count" -ge 4
 
 grep -Fq 'swap_size_mib="${IB_GATEWAY_SWAP_SIZE_MIB:-2048}"' "$swap_script"
 grep -Fq 'fallocate -l "${swap_size_mib}M" "${swap_file}"' "$swap_script"

@@ -34,8 +34,13 @@ wait_for_ready() {
     bash "${script_dir}/wait_for_ib_gateway_ready.sh" "${gateway_mode}"
 }
 
+ensure_2fa_bot_running() {
+  CONTAINER_NAME="${container_name}" bash "${script_dir}/ensure_2fa_bot_running.sh"
+}
+
 echo "Ensuring ${container_name} is running before readiness check."
 docker compose up -d --no-build
+ensure_2fa_bot_running
 
 if wait_for_ready "${initial_wait_seconds}"; then
   exit 0
@@ -44,6 +49,7 @@ fi
 echo "IB gateway API was not ready; restarting ${container_name} and retrying." >&2
 docker compose ps >&2 || true
 docker compose restart "${container_name}"
+ensure_2fa_bot_running
 
 if wait_for_ready "${restart_wait_seconds}"; then
   exit 0
@@ -51,6 +57,7 @@ fi
 
 echo "IB gateway API is still not ready; recreating ${container_name} and retrying." >&2
 docker compose up -d --force-recreate --no-build "${container_name}"
+ensure_2fa_bot_running
 
 if wait_for_ready "${recreate_wait_seconds}"; then
   exit 0
