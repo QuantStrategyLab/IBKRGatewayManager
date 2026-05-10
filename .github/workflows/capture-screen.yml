@@ -106,7 +106,7 @@ jobs:
             chmod 0644 /tmp/ibkr-gateway-screen.png
           '
           sudo docker cp ib-gateway:/tmp/ibkr-gateway-screen.png /tmp/ibkr-gateway-screen.png
-          chmod 0644 /tmp/ibkr-gateway-screen.png
+          sudo chmod 0644 /tmp/ibkr-gateway-screen.png
           ls -lh /tmp/ibkr-gateway-screen.png
           EOF
           )
