@@ -9,6 +9,7 @@ RUN apt-get update && \
         libgtk-3-0 \
         libxtst6 \
         python3-pip \
+        x11-apps \
         xdotool && \
     pip3 install pyotp ib_insync --break-system-packages && \
     apt-get clean && \
