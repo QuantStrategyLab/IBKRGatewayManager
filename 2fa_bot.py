@@ -25,7 +25,12 @@ TYPE_DELAY_MS = 100
 PRE_ENTER_DELAY = 1
 XDOTOOL_TIMEOUT = 10
 MIN_TOTP_SECONDS_REMAINING = 15
-MAX_AUTOFILL_SUBMISSIONS_RAW = os.environ.get("IBKR_2FA_MAX_SUBMISSIONS", "1")
+MAX_AUTOFILL_SUBMISSIONS_RAW = os.environ.get("IBKR_2FA_MAX_SUBMISSIONS", "3")
+MAX_AUTOFILL_SUBMISSIONS_PER_WINDOW_RAW = os.environ.get(
+    "IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW",
+    "1",
+)
+SUBMISSION_RESET_SECONDS_RAW = os.environ.get("IBKR_2FA_SUBMISSION_RESET_SECONDS", "0")
 
 # Window titles to search for 2FA prompts. Live IBKR accounts can show mobile
 # push / IB Key wording instead of the shorter TOTP-oriented prompts.
@@ -70,13 +75,36 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("2fa_bot")
-try:
-    MAX_AUTOFILL_SUBMISSIONS = int(MAX_AUTOFILL_SUBMISSIONS_RAW)
-except ValueError:
-    log.error("IBKR_2FA_MAX_SUBMISSIONS must be an integer")
-    sys.exit(1)
+
+def parse_non_negative_int_env(name, raw_value):
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        log.error("%s must be an integer", name)
+        sys.exit(1)
+    if parsed < 0:
+        log.error("%s must be non-negative", name)
+        sys.exit(1)
+    return parsed
+
+
+MAX_AUTOFILL_SUBMISSIONS = parse_non_negative_int_env(
+    "IBKR_2FA_MAX_SUBMISSIONS",
+    MAX_AUTOFILL_SUBMISSIONS_RAW,
+)
+MAX_AUTOFILL_SUBMISSIONS_PER_WINDOW = parse_non_negative_int_env(
+    "IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW",
+    MAX_AUTOFILL_SUBMISSIONS_PER_WINDOW_RAW,
+)
+SUBMISSION_RESET_SECONDS = parse_non_negative_int_env(
+    "IBKR_2FA_SUBMISSION_RESET_SECONDS",
+    SUBMISSION_RESET_SECONDS_RAW,
+)
 autofill_submission_count = 0
 autofill_limit_warned = False
+window_submission_counts = {}
+window_limit_warned = set()
+last_submission_reset_at = time.monotonic()
 
 
 @dataclass(frozen=True)
@@ -94,6 +122,9 @@ def validate_config():
         return
     if MAX_AUTOFILL_SUBMISSIONS < 1:
         log.error("IBKR_2FA_MAX_SUBMISSIONS must be at least 1")
+        sys.exit(1)
+    if MAX_AUTOFILL_SUBMISSIONS_PER_WINDOW < 1:
+        log.error("IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW must be at least 1")
         sys.exit(1)
     if not SECRET_KEY:
         log.error("TOTP_SECRET not found in environment variables")
@@ -218,6 +249,32 @@ def type_totp_into_active_window(code):
     run_xdotool(["key", "Return"])
 
 
+def maybe_reset_submission_counters():
+    global autofill_limit_warned
+    global autofill_submission_count
+    global last_submission_reset_at
+    global window_limit_warned
+    global window_submission_counts
+
+    if SUBMISSION_RESET_SECONDS <= 0:
+        return
+
+    now = time.monotonic()
+    if now - last_submission_reset_at < SUBMISSION_RESET_SECONDS:
+        return
+
+    if autofill_submission_count or window_submission_counts:
+        log.info(
+            "Resetting 2FA auto-fill counters after %ss",
+            SUBMISSION_RESET_SECONDS,
+        )
+    autofill_submission_count = 0
+    autofill_limit_warned = False
+    window_submission_counts = {}
+    window_limit_warned = set()
+    last_submission_reset_at = now
+
+
 def submit_totp(candidate):
     """Submit a TOTP code to the selected authentication popup."""
     global autofill_limit_warned
@@ -233,6 +290,8 @@ def submit_totp(candidate):
         )
         return
 
+    maybe_reset_submission_counters()
+
     if autofill_submission_count >= MAX_AUTOFILL_SUBMISSIONS:
         if not autofill_limit_warned:
             log.warning(
@@ -241,6 +300,18 @@ def submit_totp(candidate):
                 MAX_AUTOFILL_SUBMISSIONS,
             )
             autofill_limit_warned = True
+        return
+
+    window_submission_count = window_submission_counts.get(candidate.window_id, 0)
+    if window_submission_count >= MAX_AUTOFILL_SUBMISSIONS_PER_WINDOW:
+        if candidate.window_id not in window_limit_warned:
+            log.warning(
+                "Authentication window %s already received %s auto-fill submission(s); "
+                "leaving it for manual handling",
+                candidate.window_id,
+                window_submission_count,
+            )
+            window_limit_warned.add(candidate.window_id)
         return
 
     seconds_remaining = wait_for_fresh_totp_window()
@@ -258,6 +329,7 @@ def submit_totp(candidate):
     type_totp_into_active_window(code)
 
     autofill_submission_count += 1
+    window_submission_counts[candidate.window_id] = window_submission_count + 1
     log.info("Auto-fill submitted, waiting for gateway response...")
 
 
