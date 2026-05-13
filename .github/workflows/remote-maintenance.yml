@@ -11,6 +11,9 @@ on:
         options:
           - stop-2fa-bot
           - restart-2fa-bot
+          - stop-gateway
+          - restart-gateway
+          - status
 
 env:
   GCP_PROJECT_ID: interactivebrokersquant
@@ -28,6 +31,8 @@ jobs:
       GCE_USER: ${{ vars.IB_GATEWAY_GCE_USER }}
       GCE_INSTANCE_NAME: ${{ vars.IB_GATEWAY_INSTANCE_NAME }}
       GCE_ZONE: ${{ vars.IB_GATEWAY_ZONE }}
+      DEPLOY_PATH: ${{ vars.IB_GATEWAY_DEPLOY_PATH }}
+      IB_GATEWAY_MODE: ${{ vars.IB_GATEWAY_MODE }}
       SSH_PRIVATE_KEY_SECRET_NAME: ${{ vars.IB_GATEWAY_SSH_PRIVATE_KEY_SECRET_NAME }}
       MAINTENANCE_ACTION: ${{ github.event.inputs.action }}
     steps:
@@ -67,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          for var_name in GCE_USER GCE_INSTANCE_NAME GCE_ZONE; do
+          for var_name in GCE_USER GCE_INSTANCE_NAME GCE_ZONE DEPLOY_PATH; do
             if [ -z "${!var_name:-}" ]; then
               echo "${var_name} is required." >&2
               exit 1
@@ -85,6 +90,8 @@ jobs:
             --ssh-flag="-o ServerAliveCountMax=4"
             --ssh-flag="-o TCPKeepAlive=yes"
           )
+          deploy_path_quoted="$(printf '%q' "${DEPLOY_PATH}")"
+          gateway_mode_quoted="$(printf '%q' "${IB_GATEWAY_MODE:-paper}")"
 
           case "${MAINTENANCE_ACTION}" in
             stop-2fa-bot)
@@ -107,10 +114,50 @@ jobs:
           EOF
               )
               ;;
+            stop-gateway)
+              REMOTE_COMMAND=$(cat <<'EOF'
+          set -euo pipefail
+          cd __DEPLOY_PATH__
+          sudo systemctl stop ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service 2>/dev/null || true
+          sudo systemctl stop ibkr-gateway-daily-restart.timer ibkr-gateway-daily-restart.service 2>/dev/null || true
+          sudo systemctl stop ibkr-2fa-bot.timer ibkr-2fa-bot.service 2>/dev/null || true
+          sudo docker exec ib-gateway pkill -f 2fa_bot.py 2>/dev/null || true
+          sudo docker compose stop ib-gateway
+          sudo docker compose ps
+          EOF
+              )
+              ;;
+            restart-gateway)
+              REMOTE_COMMAND=$(cat <<'EOF'
+          set -euo pipefail
+          cd __DEPLOY_PATH__
+          sudo systemctl stop ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service 2>/dev/null || true
+          sudo systemctl stop ibkr-gateway-daily-restart.timer ibkr-gateway-daily-restart.service 2>/dev/null || true
+          sudo docker compose up -d --no-build ib-gateway
+          sudo bash ./scripts/install_2fa_bot_watcher.sh
+          sudo bash ./scripts/recover_ib_gateway_ready.sh __IB_GATEWAY_MODE__
+          sudo docker compose ps
+          EOF
+              )
+              ;;
+            status)
+              REMOTE_COMMAND=$(cat <<'EOF'
+          set -euo pipefail
+          cd __DEPLOY_PATH__
+          sudo docker compose ps
+          sudo systemctl status ibkr-gateway-healthcheck.timer ibkr-gateway-daily-restart.timer ibkr-2fa-bot.timer --no-pager || true
+          sudo docker exec ib-gateway pgrep -a -f "2fa_bot.py|ibgateway|socat|Xvfb|x11vnc|ibcstart" 2>/dev/null || true
+          sudo docker exec ib-gateway bash -lc 'ss -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || true' || true
+          sudo docker exec ib-gateway tail -n 80 /home/ibgateway/2fa.log 2>/dev/null || true
+          EOF
+              )
+              ;;
             *)
               echo "Unsupported maintenance action: ${MAINTENANCE_ACTION}" >&2
               exit 1
               ;;
           esac
+          REMOTE_COMMAND="${REMOTE_COMMAND//__DEPLOY_PATH__/${deploy_path_quoted}}"
+          REMOTE_COMMAND="${REMOTE_COMMAND//__IB_GATEWAY_MODE__/${gateway_mode_quoted}}"
 
           gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_COMMAND}"

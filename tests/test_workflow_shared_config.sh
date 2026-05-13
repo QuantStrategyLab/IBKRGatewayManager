@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 workflow_file="$repo_dir/.github/workflows/main.yml"
+maintenance_workflow_file="$repo_dir/.github/workflows/remote-maintenance.yml"
 
 grep -Fq 'GCP_PROJECT_ID: interactivebrokersquant' "$workflow_file"
 grep -Fq 'providers/github-ibkr-gateway-main' "$workflow_file"
@@ -26,6 +27,9 @@ grep -Fq 'vars.IB_GATEWAY_TWS_ACCEPT_INCOMING' "$workflow_file"
 grep -Fq 'vars.IB_GATEWAY_READ_ONLY_API' "$workflow_file"
 grep -Fq 'vars.IB_GATEWAY_TWOFA_DEVICE' "$workflow_file"
 grep -Fq 'vars.IB_GATEWAY_2FA_AUTOFILL' "$workflow_file"
+grep -Fq 'vars.IB_GATEWAY_2FA_MAX_SUBMISSIONS' "$workflow_file"
+grep -Fq 'vars.IB_GATEWAY_2FA_MAX_SUBMISSIONS_PER_WINDOW' "$workflow_file"
+grep -Fq 'vars.IB_GATEWAY_2FA_SUBMISSION_RESET_SECONDS' "$workflow_file"
 grep -Fq 'vars.IB_GATEWAY_SSH_PRIVATE_KEY_SECRET_NAME' "$workflow_file"
 grep -Fq 'vars.IB_GATEWAY_TWS_USERID_SECRET_NAME' "$workflow_file"
 grep -Fq 'vars.IB_GATEWAY_TWS_PASSWORD_SECRET_NAME' "$workflow_file"
@@ -75,6 +79,9 @@ grep -Fq '"TRADING_MODE": os.environ["IB_GATEWAY_MODE"]' "$workflow_file"
 grep -Fq '"ACCEPT_API_FROM_IP": os.environ["CLOUD_RUN_EGRESS_CIDR"]' "$workflow_file"
 grep -Fq '"TWOFA_DEVICE": os.environ.get("TWOFA_DEVICE", "")' "$workflow_file"
 grep -Fq '"IBKR_2FA_AUTOFILL": os.environ.get("IBKR_2FA_AUTOFILL", "")' "$workflow_file"
+grep -Fq '"IBKR_2FA_MAX_SUBMISSIONS": os.environ.get("IBKR_2FA_MAX_SUBMISSIONS") or "3"' "$workflow_file"
+grep -Fq '"IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW": os.environ.get("IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW") or "1"' "$workflow_file"
+grep -Fq '"IBKR_2FA_SUBMISSION_RESET_SECONDS": os.environ.get("IBKR_2FA_SUBMISSION_RESET_SECONDS") or "0"' "$workflow_file"
 grep -Fq 'REMOTE_DEPLOY_COMMAND=$(cat <<EOF' "$workflow_file"
 if grep -Fq 'DEPLOY_SCRIPT=' "$workflow_file"; then
   echo "Unexpected DEPLOY_SCRIPT temp upload flow still present" >&2
@@ -103,3 +110,11 @@ do
     exit 1
   fi
 done
+
+grep -Fq 'stop-gateway' "$maintenance_workflow_file"
+grep -Fq 'restart-gateway' "$maintenance_workflow_file"
+grep -Fq 'status' "$maintenance_workflow_file"
+grep -Fq 'DEPLOY_PATH: ${{ vars.IB_GATEWAY_DEPLOY_PATH }}' "$maintenance_workflow_file"
+grep -Fq 'IB_GATEWAY_MODE: ${{ vars.IB_GATEWAY_MODE }}' "$maintenance_workflow_file"
+grep -Fq 'sudo docker compose stop ib-gateway' "$maintenance_workflow_file"
+grep -Fq 'sudo docker compose up -d --no-build ib-gateway' "$maintenance_workflow_file"
