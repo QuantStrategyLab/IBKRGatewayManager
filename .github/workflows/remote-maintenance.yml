@@ -118,11 +118,13 @@ jobs:
               REMOTE_COMMAND=$(cat <<'EOF'
           set -euo pipefail
           cd __DEPLOY_PATH__
-          sudo systemctl stop ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service 2>/dev/null || true
-          sudo systemctl stop ibkr-gateway-daily-restart.timer ibkr-gateway-daily-restart.service 2>/dev/null || true
-          sudo systemctl stop ibkr-2fa-bot.timer ibkr-2fa-bot.service 2>/dev/null || true
+          sudo systemctl disable --now \
+            ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service \
+            ibkr-gateway-daily-restart.timer ibkr-gateway-daily-restart.service \
+            ibkr-2fa-bot.timer ibkr-2fa-bot.service 2>/dev/null || true
           sudo docker exec ib-gateway pkill -f 2fa_bot.py 2>/dev/null || true
-          sudo docker compose stop ib-gateway
+          sudo docker update --restart=no ib-gateway 2>/dev/null || true
+          sudo docker compose down
           sudo docker compose ps
           EOF
               )
@@ -136,6 +138,7 @@ jobs:
           sudo docker compose up -d --no-build ib-gateway
           sudo bash ./scripts/install_2fa_bot_watcher.sh
           sudo bash ./scripts/recover_ib_gateway_ready.sh __IB_GATEWAY_MODE__
+          sudo bash ./scripts/install_gateway_health_watcher.sh
           sudo docker compose ps
           EOF
               )
