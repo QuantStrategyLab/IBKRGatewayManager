@@ -6,7 +6,8 @@ repo_dir="${REPO_DIR:-$(cd "${script_dir}/.." && pwd)}"
 systemd_dir="${SYSTEMD_DIR:-/etc/systemd/system}"
 systemctl_bin="${SYSTEMCTL_BIN:-systemctl}"
 container_name="${CONTAINER_NAME:-${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}}"
-gateway_mode="${IB_GATEWAY_MODE:-paper}"
+gateway_mode="${1:-${IB_GATEWAY_MODE:-paper}}"
+compose_file="${COMPOSE_FILE:-docker-compose.yml}"
 health_interval_seconds="${IB_GATEWAY_HEALTHCHECK_INTERVAL_SECONDS:-300}"
 daily_restart_calendar="${IB_GATEWAY_DAILY_RESTART_ON_CALENDAR:-*-*-* 10:30:00 UTC}"
 
@@ -23,6 +24,7 @@ Type=oneshot
 WorkingDirectory=$repo_dir
 Environment=IB_GATEWAY_CONTAINER_NAME=$container_name
 Environment=IB_GATEWAY_MODE=$gateway_mode
+Environment=COMPOSE_FILE=$compose_file
 Environment=IB_GATEWAY_RECOVERY_LOCK_WAIT_SECONDS=0
 ExecStart=/bin/bash -lc 'cd "$repo_dir" && exec ./scripts/recover_ib_gateway_ready.sh "$gateway_mode"'
 EOF
@@ -51,6 +53,7 @@ Type=oneshot
 WorkingDirectory=$repo_dir
 Environment=IB_GATEWAY_CONTAINER_NAME=$container_name
 Environment=IB_GATEWAY_MODE=$gateway_mode
+Environment=COMPOSE_FILE=$compose_file
 ExecStart=/bin/bash -lc 'cd "$repo_dir" && exec ./scripts/restart_ib_gateway_daily.sh "$gateway_mode"'
 EOF
 
