@@ -199,7 +199,7 @@ jobs:
           echo "SCREENSHOT_PATH=${local_png}" >> "$GITHUB_ENV"
 
       - name: Upload screenshot
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ibkr-gateway-screen
           path: ${{ env.SCREENSHOT_PATH }}
