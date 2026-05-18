@@ -7,7 +7,7 @@ dockerfile="$repo_dir/Dockerfile"
 run_override="$repo_dir/container_overrides/run.sh"
 
 grep -Fq 'pip3 install pyotp ib_insync --break-system-packages' "$dockerfile"
-grep -Fq 'FROM gnzsnz/ib-gateway:10.37.1q' "$dockerfile"
+grep -Eq '^FROM gnzsnz/ib-gateway:[0-9]+[.][0-9]+[.][0-9]+[[:alnum:]._-]*$' "$dockerfile"
 grep -Fq 'LoginDialogDisplayTimeout=180' "$dockerfile"
 grep -Fq 'failed to set LoginDialogDisplayTimeout' "$dockerfile"
 grep -Fq '/home/ibgateway/ibc/config.ini.tmpl' "$dockerfile"
