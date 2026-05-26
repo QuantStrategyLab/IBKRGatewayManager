@@ -33,6 +33,9 @@ jobs:
       GCE_ZONE: ${{ vars.IB_GATEWAY_ZONE }}
       DEPLOY_PATH: ${{ vars.IB_GATEWAY_DEPLOY_PATH }}
       IB_GATEWAY_MODE: ${{ vars.IB_GATEWAY_MODE }}
+      IB_GATEWAY_CONTAINER_NAME: ${{ vars.IB_GATEWAY_CONTAINER_NAME }}
+      IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ vars.IB_GATEWAY_COMPOSE_SERVICE_NAME }}
+      IB_GATEWAY_UNIT_SUFFIX: ${{ vars.IB_GATEWAY_UNIT_SUFFIX }}
       SSH_PRIVATE_KEY_SECRET_NAME: ${{ vars.IB_GATEWAY_SSH_PRIVATE_KEY_SECRET_NAME }}
       MAINTENANCE_ACTION: ${{ github.event.inputs.action }}
     steps:
@@ -92,25 +95,34 @@ jobs:
           )
           deploy_path_quoted="$(printf '%q' "${DEPLOY_PATH}")"
           gateway_mode_quoted="$(printf '%q' "${IB_GATEWAY_MODE:-paper}")"
+          container_name_quoted="$(printf '%q' "${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}")"
+          compose_service_name_quoted="$(printf '%q' "${IB_GATEWAY_COMPOSE_SERVICE_NAME:-ib-gateway}")"
+          unit_suffix_quoted="$(printf '%q' "${IB_GATEWAY_UNIT_SUFFIX:-}")"
 
           case "${MAINTENANCE_ACTION}" in
             stop-2fa-bot)
               REMOTE_COMMAND=$(cat <<'EOF'
           set -euo pipefail
-          sudo systemctl stop ibkr-2fa-bot.timer ibkr-2fa-bot.service 2>/dev/null || true
-          sudo docker exec ib-gateway pkill -f 2fa_bot.py 2>/dev/null || true
-          sudo docker exec ib-gateway pgrep -a -f 2fa_bot.py 2>/dev/null || echo "2FA bot stopped"
-          sudo systemctl status ibkr-2fa-bot.timer ibkr-2fa-bot.service --no-pager || true
+          cd __DEPLOY_PATH__
+          container_name=__IB_GATEWAY_CONTAINER_NAME__
+          unit_suffix=__IB_GATEWAY_UNIT_SUFFIX__
+          . ./scripts/ibkr_gateway_units.sh
+          resolve_ibkr_gateway_unit_names "${container_name}" "${unit_suffix}"
+          sudo systemctl stop "${IBKR_2FA_BOT_TIMER}" "${IBKR_2FA_BOT_SERVICE}" 2>/dev/null || true
+          sudo docker exec "${container_name}" pkill -f 2fa_bot.py 2>/dev/null || true
+          sudo docker exec "${container_name}" pgrep -a -f 2fa_bot.py 2>/dev/null || echo "2FA bot stopped"
+          sudo systemctl status "${IBKR_2FA_BOT_TIMER}" "${IBKR_2FA_BOT_SERVICE}" --no-pager || true
           EOF
               )
               ;;
             restart-2fa-bot)
               REMOTE_COMMAND=$(cat <<'EOF'
           set -euo pipefail
-          sudo docker exec ib-gateway pkill -f 2fa_bot.py 2>/dev/null || true
-          sudo /usr/local/bin/ensure-ibkr-2fa-bot-running
-          sudo docker exec ib-gateway pgrep -a -f 2fa_bot.py
-          sudo docker exec ib-gateway tail -n 40 /home/ibgateway/2fa.log 2>/dev/null || true
+          container_name=__IB_GATEWAY_CONTAINER_NAME__
+          sudo docker exec "${container_name}" pkill -f 2fa_bot.py 2>/dev/null || true
+          sudo env CONTAINER_NAME="${container_name}" /usr/local/bin/ensure-ibkr-2fa-bot-running
+          sudo docker exec "${container_name}" pgrep -a -f 2fa_bot.py
+          sudo docker exec "${container_name}" tail -n 40 /home/ibgateway/2fa.log 2>/dev/null || true
           EOF
               )
               ;;
@@ -118,12 +130,16 @@ jobs:
               REMOTE_COMMAND=$(cat <<'EOF'
           set -euo pipefail
           cd __DEPLOY_PATH__
+          container_name=__IB_GATEWAY_CONTAINER_NAME__
+          unit_suffix=__IB_GATEWAY_UNIT_SUFFIX__
+          . ./scripts/ibkr_gateway_units.sh
+          resolve_ibkr_gateway_unit_names "${container_name}" "${unit_suffix}"
           sudo systemctl disable --now \
-            ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service \
-            ibkr-gateway-daily-restart.timer ibkr-gateway-daily-restart.service \
-            ibkr-2fa-bot.timer ibkr-2fa-bot.service 2>/dev/null || true
-          sudo docker exec ib-gateway pkill -f 2fa_bot.py 2>/dev/null || true
-          sudo docker update --restart=no ib-gateway 2>/dev/null || true
+            "${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "${IBKR_GATEWAY_HEALTHCHECK_SERVICE}" \
+            "${IBKR_GATEWAY_DAILY_RESTART_TIMER}" "${IBKR_GATEWAY_DAILY_RESTART_SERVICE}" \
+            "${IBKR_2FA_BOT_TIMER}" "${IBKR_2FA_BOT_SERVICE}" 2>/dev/null || true
+          sudo docker exec "${container_name}" pkill -f 2fa_bot.py 2>/dev/null || true
+          sudo docker update --restart=no "${container_name}" 2>/dev/null || true
           sudo docker compose down
           sudo docker compose ps
           EOF
@@ -133,12 +149,17 @@ jobs:
               REMOTE_COMMAND=$(cat <<'EOF'
           set -euo pipefail
           cd __DEPLOY_PATH__
-          sudo systemctl stop ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service 2>/dev/null || true
-          sudo systemctl stop ibkr-gateway-daily-restart.timer ibkr-gateway-daily-restart.service 2>/dev/null || true
-          sudo docker compose up -d --no-build ib-gateway
-          sudo bash ./scripts/install_2fa_bot_watcher.sh
-          sudo bash ./scripts/recover_ib_gateway_ready.sh __IB_GATEWAY_MODE__
-          sudo bash ./scripts/install_gateway_health_watcher.sh __IB_GATEWAY_MODE__
+          container_name=__IB_GATEWAY_CONTAINER_NAME__
+          compose_service_name=__IB_GATEWAY_COMPOSE_SERVICE_NAME__
+          unit_suffix=__IB_GATEWAY_UNIT_SUFFIX__
+          . ./scripts/ibkr_gateway_units.sh
+          resolve_ibkr_gateway_unit_names "${container_name}" "${unit_suffix}"
+          sudo systemctl stop "${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "${IBKR_GATEWAY_HEALTHCHECK_SERVICE}" 2>/dev/null || true
+          sudo systemctl stop "${IBKR_GATEWAY_DAILY_RESTART_TIMER}" "${IBKR_GATEWAY_DAILY_RESTART_SERVICE}" 2>/dev/null || true
+          sudo docker compose up -d --no-build "${compose_service_name}"
+          sudo env IB_GATEWAY_CONTAINER_NAME="${container_name}" IB_GATEWAY_UNIT_SUFFIX="${unit_suffix}" bash ./scripts/install_2fa_bot_watcher.sh
+          sudo env IB_GATEWAY_CONTAINER_NAME="${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="${compose_service_name}" bash ./scripts/recover_ib_gateway_ready.sh __IB_GATEWAY_MODE__
+          sudo env IB_GATEWAY_CONTAINER_NAME="${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="${compose_service_name}" IB_GATEWAY_UNIT_SUFFIX="${unit_suffix}" bash ./scripts/install_gateway_health_watcher.sh __IB_GATEWAY_MODE__
           sudo docker compose ps
           EOF
               )
@@ -147,11 +168,15 @@ jobs:
               REMOTE_COMMAND=$(cat <<'EOF'
           set -euo pipefail
           cd __DEPLOY_PATH__
+          container_name=__IB_GATEWAY_CONTAINER_NAME__
+          unit_suffix=__IB_GATEWAY_UNIT_SUFFIX__
+          . ./scripts/ibkr_gateway_units.sh
+          resolve_ibkr_gateway_unit_names "${container_name}" "${unit_suffix}"
           sudo docker compose ps
-          sudo systemctl status ibkr-gateway-healthcheck.timer ibkr-gateway-daily-restart.timer ibkr-2fa-bot.timer --no-pager || true
-          sudo docker exec ib-gateway pgrep -a -f "2fa_bot.py|ibgateway|socat|Xvfb|x11vnc|ibcstart" 2>/dev/null || true
-          sudo docker exec ib-gateway bash -lc 'ss -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || true' || true
-          sudo docker exec ib-gateway tail -n 80 /home/ibgateway/2fa.log 2>/dev/null || true
+          sudo systemctl status "${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "${IBKR_GATEWAY_DAILY_RESTART_TIMER}" "${IBKR_2FA_BOT_TIMER}" --no-pager || true
+          sudo docker exec "${container_name}" pgrep -a -f "2fa_bot.py|ibgateway|socat|Xvfb|x11vnc|ibcstart" 2>/dev/null || true
+          sudo docker exec "${container_name}" bash -lc 'ss -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || true' || true
+          sudo docker exec "${container_name}" tail -n 80 /home/ibgateway/2fa.log 2>/dev/null || true
           EOF
               )
               ;;
@@ -162,5 +187,8 @@ jobs:
           esac
           REMOTE_COMMAND="${REMOTE_COMMAND//__DEPLOY_PATH__/${deploy_path_quoted}}"
           REMOTE_COMMAND="${REMOTE_COMMAND//__IB_GATEWAY_MODE__/${gateway_mode_quoted}}"
+          REMOTE_COMMAND="${REMOTE_COMMAND//__IB_GATEWAY_CONTAINER_NAME__/${container_name_quoted}}"
+          REMOTE_COMMAND="${REMOTE_COMMAND//__IB_GATEWAY_COMPOSE_SERVICE_NAME__/${compose_service_name_quoted}}"
+          REMOTE_COMMAND="${REMOTE_COMMAND//__IB_GATEWAY_UNIT_SUFFIX__/${unit_suffix_quoted}}"
 
           gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_COMMAND}"

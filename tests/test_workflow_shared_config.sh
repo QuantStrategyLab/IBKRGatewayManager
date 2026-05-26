@@ -19,6 +19,14 @@ grep -Fq "WORKFLOW_DISPATCH_MODE: \${{ github.event.inputs.deploy_mode }}" "$wor
 grep -Fq 'vars.IB_GATEWAY_INSTANCE_NAME' "$workflow_file"
 grep -Fq 'vars.IB_GATEWAY_ZONE' "$workflow_file"
 grep -Fq 'vars.IB_GATEWAY_MODE' "$workflow_file"
+grep -Fq 'vars.IB_GATEWAY_CONTAINER_NAME' "$workflow_file"
+grep -Fq 'vars.IB_GATEWAY_COMPOSE_PROJECT_NAME' "$workflow_file"
+grep -Fq 'vars.IB_GATEWAY_COMPOSE_SERVICE_NAME' "$workflow_file"
+grep -Fq 'vars.IB_GATEWAY_UNIT_SUFFIX' "$workflow_file"
+grep -Fq 'vars.IB_GATEWAY_LIVE_HOST_PORT' "$workflow_file"
+grep -Fq 'vars.IB_GATEWAY_PAPER_HOST_PORT' "$workflow_file"
+grep -Fq 'vars.IB_GATEWAY_VNC_HOST_ADDRESS' "$workflow_file"
+grep -Fq 'vars.IB_GATEWAY_VNC_HOST_PORT' "$workflow_file"
 grep -Fq 'vars.IB_GATEWAY_GCE_USER' "$workflow_file"
 grep -Fq 'vars.IB_GATEWAY_DEPLOY_PATH' "$workflow_file"
 grep -Fq 'vars.IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR' "$workflow_file"
@@ -57,15 +65,16 @@ grep -Fq 'gcloud compute instances reset "${GCE_INSTANCE_NAME}"' "$workflow_file
 grep -Fq 'run_remote_ssh "Repository sync" "${REMOTE_SYNC_COMMAND}"' "$workflow_file"
 grep -Fq 'copy_remote_file "${ENV_FILE}" "${DEPLOY_PATH}/.env"' "$workflow_file"
 grep -Fq 'sudo bash ./scripts/ensure_host_swap.sh' "$workflow_file"
-grep -Fq 'sudo systemctl stop ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service 2>/dev/null || true' "$workflow_file"
-grep -Fq 'sudo bash ./scripts/install_gateway_health_watcher.sh' "$workflow_file"
-grep -Fq "sudo bash ./scripts/recover_ib_gateway_ready.sh '\${IB_GATEWAY_MODE}'" "$workflow_file"
-grep -Fq 'sudo systemctl status ibkr-gateway-healthcheck.timer --no-pager' "$workflow_file"
-grep -Fq 'sudo systemctl status ibkr-gateway-daily-restart.timer --no-pager' "$workflow_file"
+grep -Fq 'resolve_ibkr_gateway_unit_names "\${container_name}" "\${IB_GATEWAY_UNIT_SUFFIX:-}"' "$workflow_file"
+grep -Fq 'sudo systemctl stop "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "\${IBKR_GATEWAY_HEALTHCHECK_SERVICE}" 2>/dev/null || true' "$workflow_file"
+grep -Fq 'bash ./scripts/install_gateway_health_watcher.sh' "$workflow_file"
+grep -Fq "sudo env IB_GATEWAY_CONTAINER_NAME=\"\\\${container_name}\" IB_GATEWAY_COMPOSE_SERVICE_NAME=\"\\\${compose_service_name}\" bash ./scripts/recover_ib_gateway_ready.sh '\${IB_GATEWAY_MODE}'" "$workflow_file"
+grep -Fq 'sudo systemctl status "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" --no-pager' "$workflow_file"
+grep -Fq 'sudo systemctl status "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" --no-pager' "$workflow_file"
 grep -Fq 'Full deploy mode: rebuilding container' "$workflow_file"
 
-mapfile -t recover_lines < <(grep -nF "sudo bash ./scripts/recover_ib_gateway_ready.sh '\${IB_GATEWAY_MODE}'" "$workflow_file" | cut -d: -f1)
-mapfile -t health_watcher_lines < <(grep -nF 'sudo bash ./scripts/install_gateway_health_watcher.sh' "$workflow_file" | cut -d: -f1)
+mapfile -t recover_lines < <(grep -nF "bash ./scripts/recover_ib_gateway_ready.sh '\${IB_GATEWAY_MODE}'" "$workflow_file" | cut -d: -f1)
+mapfile -t health_watcher_lines < <(grep -nF 'bash ./scripts/install_gateway_health_watcher.sh' "$workflow_file" | cut -d: -f1)
 test "${#recover_lines[@]}" -eq 2
 test "${#health_watcher_lines[@]}" -eq 2
 for i in 0 1; do
@@ -77,6 +86,9 @@ done
 
 grep -Fq '"TRADING_MODE": os.environ["IB_GATEWAY_MODE"]' "$workflow_file"
 grep -Fq '"ACCEPT_API_FROM_IP": os.environ["CLOUD_RUN_EGRESS_CIDR"]' "$workflow_file"
+grep -Fq '"IB_GATEWAY_CONTAINER_NAME": os.environ.get("IB_GATEWAY_CONTAINER_NAME", "")' "$workflow_file"
+grep -Fq '"COMPOSE_PROJECT_NAME": os.environ.get("IB_GATEWAY_COMPOSE_PROJECT_NAME", "")' "$workflow_file"
+grep -Fq '"IB_GATEWAY_LIVE_HOST_PORT": os.environ.get("IB_GATEWAY_LIVE_HOST_PORT", "")' "$workflow_file"
 grep -Fq '"TWOFA_DEVICE": os.environ.get("TWOFA_DEVICE", "")' "$workflow_file"
 grep -Fq '"IBKR_2FA_AUTOFILL": os.environ.get("IBKR_2FA_AUTOFILL", "")' "$workflow_file"
 grep -Fq '"IBKR_2FA_MAX_SUBMISSIONS": os.environ.get("IBKR_2FA_MAX_SUBMISSIONS") or "3"' "$workflow_file"
@@ -116,8 +128,10 @@ grep -Fq 'restart-gateway' "$maintenance_workflow_file"
 grep -Fq 'status' "$maintenance_workflow_file"
 grep -Fq 'DEPLOY_PATH: ${{ vars.IB_GATEWAY_DEPLOY_PATH }}' "$maintenance_workflow_file"
 grep -Fq 'IB_GATEWAY_MODE: ${{ vars.IB_GATEWAY_MODE }}' "$maintenance_workflow_file"
+grep -Fq 'IB_GATEWAY_CONTAINER_NAME: ${{ vars.IB_GATEWAY_CONTAINER_NAME }}' "$maintenance_workflow_file"
+grep -Fq 'IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ vars.IB_GATEWAY_COMPOSE_SERVICE_NAME }}' "$maintenance_workflow_file"
 grep -Fq 'sudo systemctl disable --now' "$maintenance_workflow_file"
-grep -Fq 'sudo docker update --restart=no ib-gateway' "$maintenance_workflow_file"
+grep -Fq 'sudo docker update --restart=no "${container_name}"' "$maintenance_workflow_file"
 grep -Fq 'sudo docker compose down' "$maintenance_workflow_file"
-grep -Fq 'sudo docker compose up -d --no-build ib-gateway' "$maintenance_workflow_file"
-grep -Fq 'sudo bash ./scripts/install_gateway_health_watcher.sh __IB_GATEWAY_MODE__' "$maintenance_workflow_file"
+grep -Fq 'sudo docker compose up -d --no-build "${compose_service_name}"' "$maintenance_workflow_file"
+grep -Fq 'bash ./scripts/install_gateway_health_watcher.sh __IB_GATEWAY_MODE__' "$maintenance_workflow_file"
