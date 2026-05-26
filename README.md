@@ -94,6 +94,9 @@ IB_GATEWAY_MODE=paper
 IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR=10.128.0.0/20
 IB_GATEWAY_GCE_USER=zwlddx0815
 IB_GATEWAY_DEPLOY_PATH=/home/zwlddx0815/ib-docker
+IB_GATEWAY_CONTAINER_NAME=ib-gateway
+IB_GATEWAY_LIVE_HOST_PORT=4001
+IB_GATEWAY_PAPER_HOST_PORT=4002
 IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
 IB_GATEWAY_TWS_ACCEPT_INCOMING=accept
 IB_GATEWAY_READ_ONLY_API=no
@@ -109,6 +112,8 @@ The workflow maps these shared values to the gateway container's `.env`:
 - `IB_GATEWAY_ZONE` -> `GCE_ZONE`
 - `IB_GATEWAY_GCE_USER` -> `GCE_USER`
 - `IB_GATEWAY_DEPLOY_PATH` -> `DEPLOY_PATH`
+- `IB_GATEWAY_CONTAINER_NAME` -> Docker container name
+- `IB_GATEWAY_LIVE_HOST_PORT` / `IB_GATEWAY_PAPER_HOST_PORT` -> host API ports
 - `IB_GATEWAY_TWOFA_DEVICE` -> `TWOFA_DEVICE`
 - `IB_GATEWAY_2FA_AUTOFILL` -> `IBKR_2FA_AUTOFILL`
 
@@ -127,6 +132,20 @@ sudo bash ./scripts/install_gateway_health_watcher.sh
 > If you use this repository's GitHub Actions workflow, pushing deploy-related changes to `main` triggers a full deployment to GCE. The daily scheduled run only does a lightweight keepalive start and watcher check; it does not rebuild the Docker image.
 
 > Manual `workflow_dispatch` defaults to `keepalive`. If you really need to rebuild the image, choose `deploy_mode=full` when dispatching it.
+
+### Multiple Gateway Sessions on One VM
+
+The default deployment remains one container named `ib-gateway` exposing live/paper API ports `4001`/`4002`. To run another IBKR username on the same VM, use a separate deploy directory or `COMPOSE_PROJECT_NAME`, and give that instance unique container and host ports:
+
+```bash
+IB_GATEWAY_CONTAINER_NAME=ib-gateway-u1234567
+COMPOSE_PROJECT_NAME=ib-gateway-u1234567
+IB_GATEWAY_LIVE_HOST_PORT=4011
+IB_GATEWAY_PAPER_HOST_PORT=4012
+IB_GATEWAY_UNIT_SUFFIX=u1234567
+```
+
+The compose service name stays `ib-gateway` unless you intentionally change the YAML service key. The scripts use `IB_GATEWAY_COMPOSE_SERVICE_NAME` for compose operations and `IB_GATEWAY_CONTAINER_NAME` for `docker exec`/health checks. Systemd watcher units are suffixed automatically when the container name is not the default, so multiple Gateway sessions do not overwrite each other's timers.
 
 ### 4. Verify on GCE VM
 
@@ -208,6 +227,12 @@ If you temporarily keep the values in GitHub Secrets during migration, you can r
 | `IB_GATEWAY_INSTANCE_NAME` | VM instance name |
 | `IB_GATEWAY_ZONE` | VM zone |
 | `IB_GATEWAY_MODE` | `paper` or `live` |
+| `IB_GATEWAY_CONTAINER_NAME` | Optional Docker container name. Defaults to `ib-gateway`. Use a unique value per Gateway session. |
+| `IB_GATEWAY_COMPOSE_PROJECT_NAME` | Optional compose project name. Use this or a unique deploy path when running multiple sessions on one VM. |
+| `IB_GATEWAY_COMPOSE_SERVICE_NAME` | Optional compose service name. Defaults to `ib-gateway`; only change it if the compose service key changes. |
+| `IB_GATEWAY_UNIT_SUFFIX` | Optional systemd suffix. Inferred from non-default container names when unset. |
+| `IB_GATEWAY_LIVE_HOST_PORT` | Optional host port mapped to container live API port `4003`. Defaults to `4001`. |
+| `IB_GATEWAY_PAPER_HOST_PORT` | Optional host port mapped to container paper API port `4004`. Defaults to `4002`. |
 | `IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR` | Cloud Run Direct VPC egress or connector CIDR (example `10.8.0.0/26`) |
 | `IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY` | Set to `no` for Cloud Run private IP access |
 | `IB_GATEWAY_TWS_ACCEPT_INCOMING` | Optional. Recommended `accept`. |

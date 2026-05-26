@@ -49,6 +49,14 @@ jobs:
       GCE_ZONE: ${{ vars.IB_GATEWAY_ZONE }}
       DEPLOY_PATH: ${{ vars.IB_GATEWAY_DEPLOY_PATH }}
       IB_GATEWAY_MODE: ${{ vars.IB_GATEWAY_MODE }}
+      IB_GATEWAY_CONTAINER_NAME: ${{ vars.IB_GATEWAY_CONTAINER_NAME }}
+      IB_GATEWAY_COMPOSE_PROJECT_NAME: ${{ vars.IB_GATEWAY_COMPOSE_PROJECT_NAME }}
+      IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ vars.IB_GATEWAY_COMPOSE_SERVICE_NAME }}
+      IB_GATEWAY_UNIT_SUFFIX: ${{ vars.IB_GATEWAY_UNIT_SUFFIX }}
+      IB_GATEWAY_LIVE_HOST_PORT: ${{ vars.IB_GATEWAY_LIVE_HOST_PORT }}
+      IB_GATEWAY_PAPER_HOST_PORT: ${{ vars.IB_GATEWAY_PAPER_HOST_PORT }}
+      IB_GATEWAY_VNC_HOST_ADDRESS: ${{ vars.IB_GATEWAY_VNC_HOST_ADDRESS }}
+      IB_GATEWAY_VNC_HOST_PORT: ${{ vars.IB_GATEWAY_VNC_HOST_PORT }}
       CLOUD_RUN_EGRESS_CIDR: ${{ vars.IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR }}
       ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY: ${{ vars.IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY }}
       TWS_ACCEPT_INCOMING: ${{ vars.IB_GATEWAY_TWS_ACCEPT_INCOMING }}
@@ -243,6 +251,17 @@ jobs:
               "IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW": os.environ.get("IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW") or "1",
               "IBKR_2FA_SUBMISSION_RESET_SECONDS": os.environ.get("IBKR_2FA_SUBMISSION_RESET_SECONDS") or "0",
           }
+          optional_values = {
+              "IB_GATEWAY_CONTAINER_NAME": os.environ.get("IB_GATEWAY_CONTAINER_NAME", ""),
+              "COMPOSE_PROJECT_NAME": os.environ.get("IB_GATEWAY_COMPOSE_PROJECT_NAME", ""),
+              "IB_GATEWAY_COMPOSE_SERVICE_NAME": os.environ.get("IB_GATEWAY_COMPOSE_SERVICE_NAME", ""),
+              "IB_GATEWAY_UNIT_SUFFIX": os.environ.get("IB_GATEWAY_UNIT_SUFFIX", ""),
+              "IB_GATEWAY_LIVE_HOST_PORT": os.environ.get("IB_GATEWAY_LIVE_HOST_PORT", ""),
+              "IB_GATEWAY_PAPER_HOST_PORT": os.environ.get("IB_GATEWAY_PAPER_HOST_PORT", ""),
+              "IB_GATEWAY_VNC_HOST_ADDRESS": os.environ.get("IB_GATEWAY_VNC_HOST_ADDRESS", ""),
+              "IB_GATEWAY_VNC_HOST_PORT": os.environ.get("IB_GATEWAY_VNC_HOST_PORT", ""),
+          }
+          values.update({key: value for key, value in optional_values.items() if value})
 
           def quote(value: str) -> str:
               return "'" + value.replace("'", "'\"'\"'") + "'"
@@ -360,15 +379,23 @@ jobs:
           set -euo pipefail
           cd '${DEPLOY_PATH}'
           echo "[\$(date -u +%FT%TZ)] Scheduled keepalive mode: skip docker build"
-          sudo systemctl stop ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service 2>/dev/null || true
+          set -a
+          . ./.env
+          set +a
+          . ./scripts/ibkr_gateway_units.sh
+          container_name="\${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}"
+          compose_service_name="\${IB_GATEWAY_COMPOSE_SERVICE_NAME:-ib-gateway}"
+          resolve_ibkr_gateway_unit_names "\${container_name}" "\${IB_GATEWAY_UNIT_SUFFIX:-}"
+          sudo systemctl stop "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "\${IBKR_GATEWAY_HEALTHCHECK_SERVICE}" 2>/dev/null || true
+          sudo systemctl stop "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" "\${IBKR_GATEWAY_DAILY_RESTART_SERVICE}" 2>/dev/null || true
           sudo bash ./scripts/ensure_host_swap.sh
-          sudo bash ./scripts/install_2fa_bot_watcher.sh
-          sudo bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
-          sudo bash ./scripts/install_gateway_health_watcher.sh '${IB_GATEWAY_MODE}'
+          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_2fa_bot_watcher.sh
+          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
+          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_gateway_health_watcher.sh '${IB_GATEWAY_MODE}'
           sudo docker compose ps
-          sudo systemctl status ibkr-2fa-bot.timer --no-pager
-          sudo systemctl status ibkr-gateway-healthcheck.timer --no-pager
-          sudo systemctl status ibkr-gateway-daily-restart.timer --no-pager
+          sudo systemctl status "\${IBKR_2FA_BOT_TIMER}" --no-pager
+          sudo systemctl status "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" --no-pager
+          sudo systemctl status "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" --no-pager
           echo "[\$(date -u +%FT%TZ)] Keepalive complete."
           EOF
             )
@@ -377,22 +404,30 @@ jobs:
           set -euo pipefail
           cd '${DEPLOY_PATH}'
           echo "[\$(date -u +%FT%TZ)] Full deploy mode: rebuilding container"
-          sudo systemctl stop ibkr-gateway-healthcheck.timer ibkr-gateway-healthcheck.service 2>/dev/null || true
+          set -a
+          . ./.env
+          set +a
+          . ./scripts/ibkr_gateway_units.sh
+          container_name="\${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}"
+          compose_service_name="\${IB_GATEWAY_COMPOSE_SERVICE_NAME:-ib-gateway}"
+          resolve_ibkr_gateway_unit_names "\${container_name}" "\${IB_GATEWAY_UNIT_SUFFIX:-}"
+          sudo systemctl stop "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "\${IBKR_GATEWAY_HEALTHCHECK_SERVICE}" 2>/dev/null || true
+          sudo systemctl stop "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" "\${IBKR_GATEWAY_DAILY_RESTART_SERVICE}" 2>/dev/null || true
           sudo bash ./scripts/ensure_host_swap.sh
-          sudo docker compose build
+          sudo docker compose build "\${compose_service_name}"
           sudo docker compose down
-          sudo docker compose up -d
+          sudo docker compose up -d "\${compose_service_name}"
 
-          sudo bash ./scripts/install_2fa_bot_watcher.sh
-          sudo bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
-          sudo bash ./scripts/install_gateway_health_watcher.sh '${IB_GATEWAY_MODE}'
+          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_2fa_bot_watcher.sh
+          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
+          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_gateway_health_watcher.sh '${IB_GATEWAY_MODE}'
           sudo docker compose ps
-          sudo systemctl status ibkr-2fa-bot.timer --no-pager
-          sudo systemctl status ibkr-gateway-healthcheck.timer --no-pager
-          sudo systemctl status ibkr-gateway-daily-restart.timer --no-pager
+          sudo systemctl status "\${IBKR_2FA_BOT_TIMER}" --no-pager
+          sudo systemctl status "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" --no-pager
+          sudo systemctl status "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" --no-pager
 
           echo "Deployment complete. Bot is monitoring the login window."
-          echo "Run 'docker exec ib-gateway tail -f /home/ibgateway/2fa.log' for real-time status."
+          echo "Run 'docker exec \${container_name} tail -f /home/ibgateway/2fa.log' for real-time status."
           EOF
             )
           fi

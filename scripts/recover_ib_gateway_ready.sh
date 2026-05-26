@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_dir="$(cd "${script_dir}/.." && pwd)"
 container_name="${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}"
+compose_service_name="${IB_GATEWAY_COMPOSE_SERVICE_NAME:-ib-gateway}"
 gateway_mode="${1:-${IB_GATEWAY_MODE:-paper}}"
 initial_wait_seconds="${IB_GATEWAY_RECOVERY_INITIAL_WAIT_SECONDS:-240}"
 restart_wait_seconds="${IB_GATEWAY_RECOVERY_RESTART_WAIT_SECONDS:-300}"
@@ -39,7 +40,7 @@ ensure_2fa_bot_running() {
 }
 
 echo "Ensuring ${container_name} is running before readiness check."
-docker compose up -d --no-build
+docker compose up -d --no-build "${compose_service_name}"
 ensure_2fa_bot_running
 
 if wait_for_ready "${initial_wait_seconds}"; then
@@ -48,7 +49,7 @@ fi
 
 echo "IB gateway API was not ready; restarting ${container_name} and retrying." >&2
 docker compose ps >&2 || true
-docker compose restart "${container_name}"
+docker compose restart "${compose_service_name}"
 ensure_2fa_bot_running
 
 if wait_for_ready "${restart_wait_seconds}"; then
@@ -56,7 +57,7 @@ if wait_for_ready "${restart_wait_seconds}"; then
 fi
 
 echo "IB gateway API is still not ready; recreating ${container_name} and retrying." >&2
-docker compose up -d --force-recreate --no-build "${container_name}"
+docker compose up -d --force-recreate --no-build "${compose_service_name}"
 ensure_2fa_bot_running
 
 if wait_for_ready "${recreate_wait_seconds}"; then
