@@ -16,6 +16,11 @@ on:
     - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
+      target:
+        description: gateway target name from IB_GATEWAY_TARGETS_JSON, or all
+        required: false
+        default: all
+        type: string
       deploy_mode:
         description: keepalive skips docker build; full rebuilds the container
         required: false
@@ -30,48 +35,190 @@ on:
         default: false
         type: boolean
 
-env:
-  GCP_PROJECT_ID: interactivebrokersquant
-  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/303168642265/locations/global/workloadIdentityPools/github-actions/providers/github-ibkr-gateway-main
-  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ibkr-gateway-deploy@interactivebrokersquant.iam.gserviceaccount.com
-
 jobs:
+  select-targets:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    env:
+      TARGETS_JSON: ${{ vars.IB_GATEWAY_TARGETS_JSON }}
+      SELECTED_TARGET: ${{ github.event.inputs.target }}
+      LEGACY_GCP_PROJECT_ID: ${{ vars.IB_GATEWAY_GCP_PROJECT_ID }}
+      LEGACY_GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.IB_GATEWAY_GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      LEGACY_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.IB_GATEWAY_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+      LEGACY_GCE_USER: ${{ vars.IB_GATEWAY_GCE_USER }}
+      LEGACY_GCE_INSTANCE_NAME: ${{ vars.IB_GATEWAY_INSTANCE_NAME }}
+      LEGACY_GCE_ZONE: ${{ vars.IB_GATEWAY_ZONE }}
+      LEGACY_DEPLOY_PATH: ${{ vars.IB_GATEWAY_DEPLOY_PATH }}
+      LEGACY_MODE: ${{ vars.IB_GATEWAY_MODE }}
+      LEGACY_CONTAINER_NAME: ${{ vars.IB_GATEWAY_CONTAINER_NAME }}
+      LEGACY_COMPOSE_PROJECT_NAME: ${{ vars.IB_GATEWAY_COMPOSE_PROJECT_NAME }}
+      LEGACY_COMPOSE_SERVICE_NAME: ${{ vars.IB_GATEWAY_COMPOSE_SERVICE_NAME }}
+      LEGACY_UNIT_SUFFIX: ${{ vars.IB_GATEWAY_UNIT_SUFFIX }}
+      LEGACY_LIVE_HOST_PORT: ${{ vars.IB_GATEWAY_LIVE_HOST_PORT }}
+      LEGACY_PAPER_HOST_PORT: ${{ vars.IB_GATEWAY_PAPER_HOST_PORT }}
+      LEGACY_VNC_HOST_ADDRESS: ${{ vars.IB_GATEWAY_VNC_HOST_ADDRESS }}
+      LEGACY_VNC_HOST_PORT: ${{ vars.IB_GATEWAY_VNC_HOST_PORT }}
+      LEGACY_CLOUD_RUN_EGRESS_CIDR: ${{ vars.IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR }}
+      LEGACY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY: ${{ vars.IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY }}
+      LEGACY_TWS_ACCEPT_INCOMING: ${{ vars.IB_GATEWAY_TWS_ACCEPT_INCOMING }}
+      LEGACY_READ_ONLY_API: ${{ vars.IB_GATEWAY_READ_ONLY_API }}
+      LEGACY_TWOFA_DEVICE: ${{ vars.IB_GATEWAY_TWOFA_DEVICE }}
+      LEGACY_2FA_AUTOFILL: ${{ vars.IB_GATEWAY_2FA_AUTOFILL }}
+      LEGACY_2FA_MAX_SUBMISSIONS: ${{ vars.IB_GATEWAY_2FA_MAX_SUBMISSIONS }}
+      LEGACY_2FA_MAX_SUBMISSIONS_PER_WINDOW: ${{ vars.IB_GATEWAY_2FA_MAX_SUBMISSIONS_PER_WINDOW }}
+      LEGACY_2FA_SUBMISSION_RESET_SECONDS: ${{ vars.IB_GATEWAY_2FA_SUBMISSION_RESET_SECONDS }}
+      LEGACY_SSH_PRIVATE_KEY_SECRET_NAME: ${{ vars.IB_GATEWAY_SSH_PRIVATE_KEY_SECRET_NAME }}
+      LEGACY_TWS_USERID_SECRET_NAME: ${{ vars.IB_GATEWAY_TWS_USERID_SECRET_NAME }}
+      LEGACY_TWS_PASSWORD_SECRET_NAME: ${{ vars.IB_GATEWAY_TWS_PASSWORD_SECRET_NAME }}
+      LEGACY_TOTP_SECRET_SECRET_NAME: ${{ vars.IB_GATEWAY_TOTP_SECRET_SECRET_NAME }}
+      LEGACY_VNC_SERVER_PASSWORD_SECRET_NAME: ${{ vars.IB_GATEWAY_VNC_SERVER_PASSWORD_SECRET_NAME }}
+    steps:
+      - id: targets
+        name: Select gateway targets
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          def env(name: str, default: str = "") -> str:
+              return os.environ.get(name, "") or default
+
+          raw_targets = env("TARGETS_JSON").strip()
+          if raw_targets:
+              loaded = json.loads(raw_targets)
+              if isinstance(loaded, dict):
+                  targets = []
+                  for name, config in loaded.items():
+                      if not isinstance(config, dict):
+                          raise SystemExit(f"Target {name} must be an object")
+                      target = dict(config)
+                      target.setdefault("name", name)
+                      targets.append(target)
+              elif isinstance(loaded, list):
+                  targets = loaded
+              else:
+                  raise SystemExit("IB_GATEWAY_TARGETS_JSON must be an object or a list")
+          else:
+              targets = [{
+                  "name": "default",
+                  "gcp_project_id": env("LEGACY_GCP_PROJECT_ID", "interactivebrokersquant"),
+                  "gcp_workload_identity_provider": env(
+                      "LEGACY_GCP_WORKLOAD_IDENTITY_PROVIDER",
+                      "projects/303168642265/locations/global/workloadIdentityPools/github-actions/providers/github-ibkr-gateway-main",
+                  ),
+                  "gcp_workload_identity_service_account": env(
+                      "LEGACY_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT",
+                      "ibkr-gateway-deploy@interactivebrokersquant.iam.gserviceaccount.com",
+                  ),
+                  "gce_user": env("LEGACY_GCE_USER"),
+                  "gce_instance_name": env("LEGACY_GCE_INSTANCE_NAME"),
+                  "gce_zone": env("LEGACY_GCE_ZONE"),
+                  "deploy_path": env("LEGACY_DEPLOY_PATH"),
+                  "mode": env("LEGACY_MODE"),
+                  "container_name": env("LEGACY_CONTAINER_NAME"),
+                  "compose_project_name": env("LEGACY_COMPOSE_PROJECT_NAME"),
+                  "compose_service_name": env("LEGACY_COMPOSE_SERVICE_NAME"),
+                  "unit_suffix": env("LEGACY_UNIT_SUFFIX"),
+                  "live_host_port": env("LEGACY_LIVE_HOST_PORT"),
+                  "paper_host_port": env("LEGACY_PAPER_HOST_PORT"),
+                  "vnc_host_address": env("LEGACY_VNC_HOST_ADDRESS"),
+                  "vnc_host_port": env("LEGACY_VNC_HOST_PORT"),
+                  "cloud_run_egress_cidr": env("LEGACY_CLOUD_RUN_EGRESS_CIDR"),
+                  "allow_connections_from_localhost_only": env("LEGACY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY"),
+                  "tws_accept_incoming": env("LEGACY_TWS_ACCEPT_INCOMING"),
+                  "read_only_api": env("LEGACY_READ_ONLY_API"),
+                  "twofa_device": env("LEGACY_TWOFA_DEVICE"),
+                  "ibkr_2fa_autofill": env("LEGACY_2FA_AUTOFILL"),
+                  "ibkr_2fa_max_submissions": env("LEGACY_2FA_MAX_SUBMISSIONS"),
+                  "ibkr_2fa_max_submissions_per_window": env("LEGACY_2FA_MAX_SUBMISSIONS_PER_WINDOW"),
+                  "ibkr_2fa_submission_reset_seconds": env("LEGACY_2FA_SUBMISSION_RESET_SECONDS"),
+                  "ssh_private_key_secret_name": env("LEGACY_SSH_PRIVATE_KEY_SECRET_NAME"),
+                  "tws_userid_secret_name": env("LEGACY_TWS_USERID_SECRET_NAME"),
+                  "tws_password_secret_name": env("LEGACY_TWS_PASSWORD_SECRET_NAME"),
+                  "totp_secret_secret_name": env("LEGACY_TOTP_SECRET_SECRET_NAME"),
+                  "vnc_server_password_secret_name": env("LEGACY_VNC_SERVER_PASSWORD_SECRET_NAME"),
+              }]
+
+          normalized = []
+          seen = set()
+          for target in targets:
+              if not isinstance(target, dict):
+                  raise SystemExit("Each gateway target must be an object")
+              name = target.get("name")
+              if not name:
+                  raise SystemExit("Each gateway target requires a name")
+              if name in seen:
+                  raise SystemExit(f"Duplicate gateway target: {name}")
+              seen.add(name)
+              normalized.append(target)
+
+          selected_name = env("SELECTED_TARGET") or "all"
+          if selected_name == "all":
+              selected = normalized
+          else:
+              selected = [target for target in normalized if target["name"] == selected_name]
+              if not selected:
+                  known = ", ".join(target["name"] for target in normalized)
+                  raise SystemExit(f"Unknown gateway target {selected_name!r}. Known targets: {known}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("matrix=" + json.dumps({"target": selected}, separators=(",", ":")) + "\n")
+          print("Selected targets: " + ", ".join(target["name"] for target in selected))
+          PY
+
   deploy:
+    needs: select-targets
+    name: deploy (${{ matrix.target.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}
+    concurrency:
+      group: ibkr-gateway-${{ matrix.target.name }}
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
     env:
+      TARGET_NAME: ${{ matrix.target.name }}
       DEPLOY_EVENT_NAME: ${{ github.event_name }}
-      GCE_USER: ${{ vars.IB_GATEWAY_GCE_USER }}
-      GCE_INSTANCE_NAME: ${{ vars.IB_GATEWAY_INSTANCE_NAME }}
-      GCE_ZONE: ${{ vars.IB_GATEWAY_ZONE }}
-      DEPLOY_PATH: ${{ vars.IB_GATEWAY_DEPLOY_PATH }}
-      IB_GATEWAY_MODE: ${{ vars.IB_GATEWAY_MODE }}
-      IB_GATEWAY_CONTAINER_NAME: ${{ vars.IB_GATEWAY_CONTAINER_NAME }}
-      IB_GATEWAY_COMPOSE_PROJECT_NAME: ${{ vars.IB_GATEWAY_COMPOSE_PROJECT_NAME }}
-      IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ vars.IB_GATEWAY_COMPOSE_SERVICE_NAME }}
-      IB_GATEWAY_UNIT_SUFFIX: ${{ vars.IB_GATEWAY_UNIT_SUFFIX }}
-      IB_GATEWAY_LIVE_HOST_PORT: ${{ vars.IB_GATEWAY_LIVE_HOST_PORT }}
-      IB_GATEWAY_PAPER_HOST_PORT: ${{ vars.IB_GATEWAY_PAPER_HOST_PORT }}
-      IB_GATEWAY_VNC_HOST_ADDRESS: ${{ vars.IB_GATEWAY_VNC_HOST_ADDRESS }}
-      IB_GATEWAY_VNC_HOST_PORT: ${{ vars.IB_GATEWAY_VNC_HOST_PORT }}
-      CLOUD_RUN_EGRESS_CIDR: ${{ vars.IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR }}
-      ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY: ${{ vars.IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY }}
-      TWS_ACCEPT_INCOMING: ${{ vars.IB_GATEWAY_TWS_ACCEPT_INCOMING }}
-      READ_ONLY_API: ${{ vars.IB_GATEWAY_READ_ONLY_API }}
-      TWOFA_DEVICE: ${{ vars.IB_GATEWAY_TWOFA_DEVICE }}
-      IBKR_2FA_AUTOFILL: ${{ vars.IB_GATEWAY_2FA_AUTOFILL }}
-      IBKR_2FA_MAX_SUBMISSIONS: ${{ vars.IB_GATEWAY_2FA_MAX_SUBMISSIONS }}
-      IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW: ${{ vars.IB_GATEWAY_2FA_MAX_SUBMISSIONS_PER_WINDOW }}
-      IBKR_2FA_SUBMISSION_RESET_SECONDS: ${{ vars.IB_GATEWAY_2FA_SUBMISSION_RESET_SECONDS }}
-      SSH_PRIVATE_KEY_SECRET_NAME: ${{ vars.IB_GATEWAY_SSH_PRIVATE_KEY_SECRET_NAME }}
-      TWS_USERID_SECRET_NAME: ${{ vars.IB_GATEWAY_TWS_USERID_SECRET_NAME }}
-      TWS_PASSWORD_SECRET_NAME: ${{ vars.IB_GATEWAY_TWS_PASSWORD_SECRET_NAME }}
-      TOTP_SECRET_SECRET_NAME: ${{ vars.IB_GATEWAY_TOTP_SECRET_SECRET_NAME }}
-      VNC_SERVER_PASSWORD_SECRET_NAME: ${{ vars.IB_GATEWAY_VNC_SERVER_PASSWORD_SECRET_NAME }}
+      GCP_PROJECT_ID: ${{ matrix.target.gcp_project_id }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ matrix.target.gcp_workload_identity_provider }}
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ matrix.target.gcp_workload_identity_service_account }}
+      GCE_USER: ${{ matrix.target.gce_user }}
+      GCE_INSTANCE_NAME: ${{ matrix.target.gce_instance_name }}
+      GCE_ZONE: ${{ matrix.target.gce_zone }}
+      DEPLOY_PATH: ${{ matrix.target.deploy_path }}
+      IB_GATEWAY_MODE: ${{ matrix.target.mode }}
+      IB_GATEWAY_CONTAINER_NAME: ${{ matrix.target.container_name }}
+      IB_GATEWAY_COMPOSE_PROJECT_NAME: ${{ matrix.target.compose_project_name }}
+      IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ matrix.target.compose_service_name }}
+      IB_GATEWAY_UNIT_SUFFIX: ${{ matrix.target.unit_suffix }}
+      IB_GATEWAY_LIVE_HOST_PORT: ${{ matrix.target.live_host_port }}
+      IB_GATEWAY_PAPER_HOST_PORT: ${{ matrix.target.paper_host_port }}
+      IB_GATEWAY_VNC_HOST_ADDRESS: ${{ matrix.target.vnc_host_address }}
+      IB_GATEWAY_VNC_HOST_PORT: ${{ matrix.target.vnc_host_port }}
+      CLOUD_RUN_EGRESS_CIDR: ${{ matrix.target.cloud_run_egress_cidr }}
+      ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY: ${{ matrix.target.allow_connections_from_localhost_only }}
+      TWS_ACCEPT_INCOMING: ${{ matrix.target.tws_accept_incoming }}
+      READ_ONLY_API: ${{ matrix.target.read_only_api }}
+      TWOFA_DEVICE: ${{ matrix.target.twofa_device }}
+      IBKR_2FA_AUTOFILL: ${{ matrix.target.ibkr_2fa_autofill }}
+      IBKR_2FA_MAX_SUBMISSIONS: ${{ matrix.target.ibkr_2fa_max_submissions }}
+      IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW: ${{ matrix.target.ibkr_2fa_max_submissions_per_window }}
+      IBKR_2FA_SUBMISSION_RESET_SECONDS: ${{ matrix.target.ibkr_2fa_submission_reset_seconds }}
+      SSH_PRIVATE_KEY_SECRET_NAME: ${{ matrix.target.ssh_private_key_secret_name }}
+      TWS_USERID_SECRET_NAME: ${{ matrix.target.tws_userid_secret_name }}
+      TWS_PASSWORD_SECRET_NAME: ${{ matrix.target.tws_password_secret_name }}
+      TOTP_SECRET_SECRET_NAME: ${{ matrix.target.totp_secret_secret_name }}
+      VNC_SERVER_PASSWORD_SECRET_NAME: ${{ matrix.target.vnc_server_password_secret_name }}
       WORKFLOW_DISPATCH_MODE: ${{ github.event.inputs.deploy_mode }}
+      WORKFLOW_DISPATCH_TARGET: ${{ github.event.inputs.target }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -87,6 +234,9 @@ jobs:
           set -euo pipefail
 
           required_vars=(
+            GCP_PROJECT_ID
+            GCP_WORKLOAD_IDENTITY_PROVIDER
+            GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT
             GCE_USER
             GCE_INSTANCE_NAME
             GCE_ZONE
@@ -119,8 +269,11 @@ jobs:
           require_secret_source SSH_PRIVATE_KEY_SECRET_NAME SSH_PRIVATE_KEY SSH_PRIVATE_KEY
           require_secret_source TWS_USERID_SECRET_NAME TWS_USERID TWS_USERID
           require_secret_source TWS_PASSWORD_SECRET_NAME TWS_PASSWORD TWS_PASSWORD
-          require_secret_source TOTP_SECRET_SECRET_NAME TOTP_SECRET TOTP_SECRET
           require_secret_source VNC_SERVER_PASSWORD_SECRET_NAME VNC_SERVER_PASSWORD VNC_SERVER_PASSWORD
+          twofa_autofill="$(printf '%s' "${IBKR_2FA_AUTOFILL:-}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${twofa_autofill}" = "yes" ] || [ "${twofa_autofill}" = "true" ] || [ "${twofa_autofill}" = "1" ]; then
+            require_secret_source TOTP_SECRET_SECRET_NAME TOTP_SECRET TOTP_SECRET
+          fi
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -145,6 +298,11 @@ jobs:
           VNC_SERVER_PASSWORD: ${{ secrets.VNC_SERVER_PASSWORD }}
         run: |
           set -euo pipefail
+
+          if [ "${WORKFLOW_DISPATCH_TARGET:-all}" = "all" ]; then
+            echo "sync_github_secrets_to_secret_manager requires one explicit target to avoid writing the same GitHub secrets to multiple gateways." >&2
+            exit 1
+          fi
 
           sync_secret() {
             local secret_name="$1"
@@ -172,8 +330,11 @@ jobs:
           sync_secret "${SSH_PRIVATE_KEY_SECRET_NAME:-}" "${SSH_PRIVATE_KEY:-}" "SSH_PRIVATE_KEY"
           sync_secret "${TWS_USERID_SECRET_NAME:-}" "${TWS_USERID:-}" "TWS_USERID"
           sync_secret "${TWS_PASSWORD_SECRET_NAME:-}" "${TWS_PASSWORD:-}" "TWS_PASSWORD"
-          sync_secret "${TOTP_SECRET_SECRET_NAME:-}" "${TOTP_SECRET:-}" "TOTP_SECRET"
           sync_secret "${VNC_SERVER_PASSWORD_SECRET_NAME:-}" "${VNC_SERVER_PASSWORD:-}" "VNC_SERVER_PASSWORD"
+          twofa_autofill="$(printf '%s' "${IBKR_2FA_AUTOFILL:-}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${twofa_autofill}" = "yes" ] || [ "${twofa_autofill}" = "true" ] || [ "${twofa_autofill}" = "1" ] || [ -n "${TOTP_SECRET:-}" ]; then
+            sync_secret "${TOTP_SECRET_SECRET_NAME:-}" "${TOTP_SECRET:-}" "TOTP_SECRET"
+          fi
 
       - name: Prepare SSH key and deployment files
         env:
@@ -199,10 +360,19 @@ jobs:
           ssh_private_key="$(resolve_secret "${SSH_PRIVATE_KEY_SECRET_NAME:-}" "${SSH_PRIVATE_KEY:-}")"
           tws_userid="$(resolve_secret "${TWS_USERID_SECRET_NAME:-}" "${TWS_USERID:-}")"
           tws_password="$(resolve_secret "${TWS_PASSWORD_SECRET_NAME:-}" "${TWS_PASSWORD:-}")"
-          totp_secret="$(resolve_secret "${TOTP_SECRET_SECRET_NAME:-}" "${TOTP_SECRET:-}")"
+          totp_secret=""
+          if [ -n "${TOTP_SECRET_SECRET_NAME:-}" ] || [ -n "${TOTP_SECRET:-}" ]; then
+            totp_secret="$(resolve_secret "${TOTP_SECRET_SECRET_NAME:-}" "${TOTP_SECRET:-}")"
+          fi
           vnc_server_password="$(resolve_secret "${VNC_SERVER_PASSWORD_SECRET_NAME:-}" "${VNC_SERVER_PASSWORD:-}")"
 
-          for required_value in ssh_private_key tws_userid tws_password totp_secret vnc_server_password; do
+          required_values=(ssh_private_key tws_userid tws_password vnc_server_password)
+          twofa_autofill="$(printf '%s' "${IBKR_2FA_AUTOFILL:-}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${twofa_autofill}" = "yes" ] || [ "${twofa_autofill}" = "true" ] || [ "${twofa_autofill}" = "1" ]; then
+            required_values+=(totp_secret)
+          fi
+
+          for required_value in "${required_values[@]}"; do
             if [ -z "${!required_value:-}" ]; then
               echo "Resolved ${required_value} is empty." >&2
               exit 1
