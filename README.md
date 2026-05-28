@@ -164,6 +164,8 @@ sudo bash ./scripts/install_gateway_health_watcher.sh
 
 > Manual `workflow_dispatch` defaults to `keepalive`. If you really need to rebuild the image, choose `deploy_mode=full` when dispatching it.
 
+The deploy workflow uploads a source archive from the GitHub runner to the VM. The VM does not need GitHub credentials or a checked-out private repository to receive updates.
+
 ### Multiple Gateway Sessions on One VM
 
 The default deployment remains one container named `ib-gateway` exposing live/paper API ports `4001`/`4002`. To run another IBKR username on the same VM, use a separate deploy directory or `COMPOSE_PROJECT_NAME`, and give that instance unique container and host ports:
