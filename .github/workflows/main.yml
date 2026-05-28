@@ -322,10 +322,16 @@ jobs:
             printf '%s' "${secret_value}" | gcloud secrets versions add "${secret_name}" --project "${GCP_PROJECT_ID}" --data-file=- >/dev/null
           }
 
-          echo "::add-mask::${TWS_USERID}"
-          echo "::add-mask::${TWS_PASSWORD}"
-          echo "::add-mask::${TOTP_SECRET}"
-          echo "::add-mask::${VNC_SERVER_PASSWORD}"
+          mask_if_present() {
+            if [ -n "${1:-}" ]; then
+              echo "::add-mask::$1"
+            fi
+          }
+
+          mask_if_present "${TWS_USERID:-}"
+          mask_if_present "${TWS_PASSWORD:-}"
+          mask_if_present "${TOTP_SECRET:-}"
+          mask_if_present "${VNC_SERVER_PASSWORD:-}"
 
           sync_secret "${SSH_PRIVATE_KEY_SECRET_NAME:-}" "${SSH_PRIVATE_KEY:-}" "SSH_PRIVATE_KEY"
           sync_secret "${TWS_USERID_SECRET_NAME:-}" "${TWS_USERID:-}" "TWS_USERID"
@@ -379,10 +385,16 @@ jobs:
             fi
           done
 
-          echo "::add-mask::${tws_userid}"
-          echo "::add-mask::${tws_password}"
-          echo "::add-mask::${totp_secret}"
-          echo "::add-mask::${vnc_server_password}"
+          mask_if_present() {
+            if [ -n "${1:-}" ]; then
+              echo "::add-mask::$1"
+            fi
+          }
+
+          mask_if_present "${tws_userid:-}"
+          mask_if_present "${tws_password:-}"
+          mask_if_present "${totp_secret:-}"
+          mask_if_present "${vnc_server_password:-}"
 
           install -d -m 700 "$RUNNER_TEMP/ssh"
           SSH_KEY_FILE="$RUNNER_TEMP/ssh/google_compute_engine"
