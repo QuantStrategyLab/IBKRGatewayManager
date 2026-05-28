@@ -53,7 +53,13 @@ if IB is not None:
     ib = IB()
     try:
         try:
-            ib.connect(host, port, clientId=client_id, timeout=timeout_seconds)
+            ib.connect(
+                host,
+                port,
+                clientId=client_id,
+                timeout=timeout_seconds,
+                readonly=True,
+            )
             accounts = ib.managedAccounts()
             if not accounts:
                 raise RuntimeError("IB API healthcheck did not receive managed accounts")

@@ -21,7 +21,7 @@ test -x "$unit_helper_script"
 
 grep -Fq 'IB_GATEWAY_RECOVERY_INITIAL_WAIT_SECONDS:-240' "$recover_script"
 grep -Fq 'IB_GATEWAY_RECOVERY_RESTART_WAIT_SECONDS:-300' "$recover_script"
-grep -Fq 'IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS:-360' "$recover_script"
+grep -Fq 'IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS:-600' "$recover_script"
 grep -Fq 'IB_GATEWAY_RECOVERY_LOCK_FILE:-/var/lock/ib_gateway_recovery.lock' "$recover_script"
 grep -Fq 'IB_GATEWAY_RECOVERY_LOCK_WAIT_SECONDS:-900' "$recover_script"
 grep -Fq 'flock -n 9' "$recover_script"
