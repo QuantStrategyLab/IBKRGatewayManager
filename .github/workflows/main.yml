@@ -528,19 +528,26 @@ jobs:
             gcloud compute scp "${source_file}" "${REMOTE_TARGET}:${dest_file}" "${SCP_FLAGS[@]}"
           }
 
+          SOURCE_ARCHIVE="$RUNNER_TEMP/ibkr-gateway-source.tar.gz"
+          REMOTE_ARCHIVE="/tmp/ibkr-gateway-${TARGET_NAME}-${GITHUB_SHA}.tar.gz"
+          git archive --format=tar.gz --output="${SOURCE_ARCHIVE}" HEAD
+          log_step "Uploading source archive to ${REMOTE_ARCHIVE}"
+          copy_remote_file "${SOURCE_ARCHIVE}" "${REMOTE_ARCHIVE}"
+
           REMOTE_SYNC_COMMAND=$(cat <<EOF
           set -euo pipefail
-          echo "[\$(date -u +%FT%TZ)] Syncing repository contents"
+          case '${DEPLOY_PATH}' in
+            ''|'/'|'/home'|'/opt')
+              echo "Refusing unsafe DEPLOY_PATH: '${DEPLOY_PATH}'" >&2
+              exit 1
+              ;;
+          esac
+          echo "[\$(date -u +%FT%TZ)] Syncing source archive"
+          sudo rm -rf '${DEPLOY_PATH}'
           sudo mkdir -p '${DEPLOY_PATH}'
           sudo chown -R '${GCE_USER}':'${GCE_USER}' '${DEPLOY_PATH}'
-          if [ -d '${DEPLOY_PATH}/.git' ]; then
-            cd '${DEPLOY_PATH}'
-            git fetch --all
-            git reset --hard origin/main
-          else
-            rm -rf '${DEPLOY_PATH}'
-            git clone 'https://github.com/${{ github.repository }}.git' '${DEPLOY_PATH}'
-          fi
+          tar -xzf '${REMOTE_ARCHIVE}' -C '${DEPLOY_PATH}'
+          rm -f '${REMOTE_ARCHIVE}'
           EOF
           )
 
