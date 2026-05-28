@@ -85,7 +85,7 @@ ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
 
 ### Shared GitHub Config (Recommended)
 
-If `InteractiveBrokersPlatform` and `IBKRGatewayManager` share one GitHub-managed config, keep these non-secret values in GitHub Variables:
+If `InteractiveBrokersPlatform` and `IBKRGatewayManager` share one GitHub-managed config, keep these non-secret values in GitHub Variables. For one gateway, the legacy `IB_GATEWAY_*` variables are enough:
 
 ```bash
 IB_GATEWAY_INSTANCE_NAME=interactive-brokers-quant-instance
@@ -120,6 +120,37 @@ The workflow maps these shared values to the gateway container's `.env`:
 `ACCEPT_API_FROM_IP` is intentionally treated as required now. For manual `docker compose` usage, if you forget to set it, Compose will fail fast instead of starting a gateway that Cloud Run can never reach.
 
 This shared GitHub config is scoped to the **IBKR deployment pair only** (`InteractiveBrokersPlatform` + `IBKRGatewayManager`). It should not be treated as a platform-wide secret set for unrelated quant projects. The gateway workflow now authenticates to GCP with **GitHub OIDC + Workload Identity Federation** instead of a long-lived `GCP_SA_KEY`.
+
+For multiple gateway VMs or multiple IBKR usernames, prefer one repository variable named `IB_GATEWAY_TARGETS_JSON`. It contains only routing/config metadata; credentials still live in GitHub Secrets or Secret Manager:
+
+```json
+{
+  "paper-example": {
+    "gcp_project_id": "my-gcp-project",
+    "gcp_workload_identity_provider": "projects/123456789/locations/global/workloadIdentityPools/github-actions/providers/github-ibkr-gateway-main",
+    "gcp_workload_identity_service_account": "ibkr-gateway-deploy@my-gcp-project.iam.gserviceaccount.com",
+    "gce_user": "ubuntu",
+    "gce_instance_name": "ibkr-gateway-paper",
+    "gce_zone": "us-central1-c",
+    "deploy_path": "/opt/ibkr-gateway-paper",
+    "mode": "paper",
+    "container_name": "ib-gateway",
+    "compose_project_name": "ibkr-gateway-paper",
+    "compose_service_name": "ib-gateway",
+    "cloud_run_egress_cidr": "10.0.0.0/8",
+    "allow_connections_from_localhost_only": "no",
+    "tws_accept_incoming": "accept",
+    "read_only_api": "no",
+    "ibkr_2fa_autofill": "no",
+    "ssh_private_key_secret_name": "ib-gateway-paper-ssh-private-key",
+    "tws_userid_secret_name": "ib-gateway-paper-tws-userid",
+    "tws_password_secret_name": "ib-gateway-paper-tws-password",
+    "vnc_server_password_secret_name": "ib-gateway-paper-vnc-server-password"
+  }
+}
+```
+
+Manual workflow dispatch accepts `target=all` or a specific key from `IB_GATEWAY_TARGETS_JSON`. Scheduled keepalive and push deployments run all configured targets sequentially.
 
 ### 3. Start IBKR Gateway
 
@@ -209,6 +240,8 @@ This workflow now uses **GitHub OIDC + Workload Identity Federation** for Google
 If you want to stop storing the gateway credentials in GitHub Secrets, set these variables to Secret Manager secret names in project `interactivebrokersquant`. When a `*_SECRET_NAME` variable is present, the workflow reads the latest secret version from Secret Manager; otherwise it falls back to the matching GitHub secret.
 
 If you temporarily keep the values in GitHub Secrets during migration, you can run the workflow manually with `sync_github_secrets_to_secret_manager=true` once, then delete the GitHub Secrets after verification.
+
+When `IB_GATEWAY_TARGETS_JSON` is used, each target can point to different Secret Manager secret names and even different GCP projects. `TOTP_SECRET` is only required when `ibkr_2fa_autofill` is set to `yes`, `true`, or `1`.
 
 | Variable | Reads secret value for |
 | :--- | :--- |
