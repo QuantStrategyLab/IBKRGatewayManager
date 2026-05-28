@@ -31,6 +31,12 @@ MAX_AUTOFILL_SUBMISSIONS_PER_WINDOW_RAW = os.environ.get(
     "1",
 )
 SUBMISSION_RESET_SECONDS_RAW = os.environ.get("IBKR_2FA_SUBMISSION_RESET_SECONDS", "0")
+DISMISS_LOGIN_MESSAGES = os.environ.get("IBKR_DISMISS_LOGIN_MESSAGES", "yes").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 
 # Window titles to search for 2FA prompts. Live IBKR accounts can show mobile
 # push / IB Key wording instead of the shorter TOTP-oriented prompts.
@@ -62,6 +68,12 @@ AUTH_TITLE_KEYWORDS = (
 )
 IGNORED_TITLE_KEYWORDS = (
     "authenticating",
+)
+DISMISSIBLE_DIALOG_SEARCH_PATTERNS = [
+    "Login Messages",
+]
+DISMISSIBLE_DIALOG_TITLE_KEYWORDS = (
+    "login messages",
 )
 # Current IBKR Gateway TOTP prompts place the code field in the upper half of
 # the compact dialog. Keep the click centered on the text field instead of the
@@ -105,6 +117,7 @@ autofill_limit_warned = False
 window_submission_counts = {}
 window_limit_warned = set()
 last_submission_reset_at = time.monotonic()
+dismissed_dialog_windows = set()
 
 
 @dataclass(frozen=True)
@@ -192,16 +205,26 @@ def is_auth_candidate(title):
     return any(keyword in normalized_title for keyword in AUTH_TITLE_KEYWORDS)
 
 
-def find_auth_windows():
-    """Find visible IBKR authentication windows without relying on focus state."""
+def is_dismissible_dialog_candidate(title):
+    normalized_title = title.lower()
+    return any(keyword in normalized_title for keyword in DISMISSIBLE_DIALOG_TITLE_KEYWORDS)
+
+
+def find_windows_by_patterns(patterns):
     window_ids = []
-    for pattern in SEARCH_PATTERNS:
+    for pattern in patterns:
         res = run_xdotool(["search", "--name", pattern])
         if res.returncode != 0:
             continue
         for window_id in res.stdout.splitlines():
             if window_id and window_id not in window_ids:
                 window_ids.append(window_id)
+    return window_ids
+
+
+def find_auth_windows():
+    """Find visible IBKR authentication windows without relying on focus state."""
+    window_ids = find_windows_by_patterns(SEARCH_PATTERNS)
 
     candidates = []
     for window_id in reversed(window_ids):
@@ -211,6 +234,45 @@ def find_auth_windows():
         width, height = get_window_geometry(window_id)
         candidates.append(WindowCandidate(window_id, title, width, height))
     return candidates
+
+
+def find_dismissible_dialogs():
+    if not DISMISS_LOGIN_MESSAGES:
+        return []
+
+    candidates = []
+    for window_id in reversed(find_windows_by_patterns(DISMISSIBLE_DIALOG_SEARCH_PATTERNS)):
+        title = get_window_title(window_id)
+        if not is_dismissible_dialog_candidate(title):
+            continue
+        width, height = get_window_geometry(window_id)
+        candidates.append(WindowCandidate(window_id, title, width, height))
+    return candidates
+
+
+def dismiss_dialog(candidate):
+    if candidate.window_id not in dismissed_dialog_windows:
+        log.info(
+            "Dismissing post-login dialog (id=%s, title=%r, size=%sx%s)",
+            candidate.window_id,
+            candidate.title,
+            candidate.width or "?",
+            candidate.height or "?",
+        )
+        dismissed_dialog_windows.add(candidate.window_id)
+
+    run_xdotool(["windowactivate", "--sync", candidate.window_id])
+    run_xdotool(["windowfocus", "--sync", candidate.window_id])
+    time.sleep(0.2)
+    run_xdotool(["key", "Return"])
+
+
+def dismiss_post_login_dialogs():
+    candidates = find_dismissible_dialogs()
+    for candidate in candidates:
+        dismiss_dialog(candidate)
+        return True
+    return False
 
 
 def wait_for_fresh_totp_window():
@@ -348,6 +410,9 @@ def main():
 
     while True:
         try:
+            if dismiss_post_login_dialogs():
+                time.sleep(1)
+                continue
             if find_and_fill():
                 time.sleep(FILL_COOLDOWN)
         except Exception as e:
