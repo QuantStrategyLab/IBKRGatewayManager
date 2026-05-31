@@ -320,6 +320,40 @@ jobs:
             fi
 
             printf '%s' "${secret_value}" | gcloud secrets versions add "${secret_name}" --project "${GCP_PROJECT_ID}" --data-file=- >/dev/null
+            cleanup_secret_versions "${secret_name}"
+          }
+
+          cleanup_secret_versions() {
+            local secret_name="$1"
+            local old_versions
+
+            old_versions="$(
+              gcloud secrets versions list "${secret_name}" \
+                --project "${GCP_PROJECT_ID}" \
+                --format=json \
+                | python -c 'import json,sys
+rows = json.load(sys.stdin)
+active = [
+    int(row["name"].rsplit("/", 1)[-1])
+    for row in rows
+    if row.get("state") in {"ENABLED", "DISABLED"}
+]
+if len(active) <= 1:
+    sys.exit(0)
+keep = max(active)
+print("\n".join(str(version) for version in active if version != keep))
+'
+            )"
+
+            while IFS= read -r version; do
+              if [ -z "${version}" ]; then
+                continue
+              fi
+              gcloud secrets versions destroy "${version}" \
+                --secret "${secret_name}" \
+                --project "${GCP_PROJECT_ID}" \
+                --quiet >/dev/null
+            done <<< "${old_versions}"
           }
 
           mask_if_present() {
