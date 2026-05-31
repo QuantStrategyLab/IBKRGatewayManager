@@ -334,8 +334,10 @@ systemctl status ibkr-gateway-daily-restart.timer --no-pager
 then restarts and finally recreates the container if the API does not recover.
 
 `ibkr-gateway-daily-restart.timer` restarts the Gateway once per day at
-`10:30 UTC` by default, then waits for the same API handshake readiness. Override
-the schedule during install with:
+`10:30 UTC` by default, then waits for the same API handshake readiness. Missed
+daily restart times are not replayed when the timer is started manually, so
+re-enabling the timer during a maintenance window does not immediately restart
+an already-authenticated Gateway. Override the schedule during install with:
 
 ```bash
 IB_GATEWAY_DAILY_RESTART_ON_CALENDAR='Mon..Fri 10:30:00 UTC' sudo bash ./scripts/install_gateway_health_watcher.sh
