@@ -10,7 +10,6 @@ on:
       - 'requirements.txt'
       - 'scripts/**'
       - 'container_overrides/**'
-      - '.github/workflows/main.yml'
   # Runs automatically every day at 0:00 UTC (8:00 AM Beijing Time)
   schedule:
     - cron: '0 0 * * *'
@@ -331,18 +330,7 @@ jobs:
               gcloud secrets versions list "${secret_name}" \
                 --project "${GCP_PROJECT_ID}" \
                 --format=json \
-                | python -c 'import json,sys
-rows = json.load(sys.stdin)
-active = [
-    int(row["name"].rsplit("/", 1)[-1])
-    for row in rows
-    if row.get("state") in {"ENABLED", "DISABLED"}
-]
-if len(active) <= 1:
-    sys.exit(0)
-keep = max(active)
-print("\n".join(str(version) for version in active if version != keep))
-'
+                | python3 -c 'import json, sys; rows = json.load(sys.stdin); active = [int(row["name"].rsplit("/", 1)[-1]) for row in rows if row.get("state") in {"ENABLED", "DISABLED"}]; keep = max(active) if active else None; print("\n".join(str(version) for version in active if version != keep))'
             )"
 
             while IFS= read -r version; do
