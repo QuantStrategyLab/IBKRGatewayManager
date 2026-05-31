@@ -79,7 +79,7 @@ Description=Restart IBKR Gateway on a fixed daily schedule
 
 [Timer]
 OnCalendar=$daily_restart_calendar
-Persistent=true
+Persistent=false
 Unit=$IBKR_GATEWAY_DAILY_RESTART_SERVICE
 
 [Install]
