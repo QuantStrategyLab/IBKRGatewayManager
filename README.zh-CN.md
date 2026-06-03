@@ -2,61 +2,38 @@
 
 [English README](README.md)
 
-> ⚠️ 投资有风险，不构成投资建议，仅供学习交流用途。
+> 投资有风险。本项目不构成投资建议，仅用于学习、研究和工程审阅。
 
-## 这个项目做什么
+## 这个仓库是什么
 
-IBKRGatewayManager 是 QuantStrategyLab 体系中的**网关运维工具**。管理 IBKR Gateway VM 的部署和生命周期任务，包括 Docker 发布、远端同步和 2FA watcher 配置。
+IBKRGatewayManager 是 QuantStrategyLab 的IBKR Gateway 运维工具。管理 IBKR Gateway VM 的部署、远端同步、Docker 发布和 2FA watcher。
 
-## 适合谁使用
+它支撑系统运行，但不决定哪个策略应该 live。策略资格由策略仓和 snapshot 仓负责；券商执行由平台仓负责。
 
-- 希望阅读、复现或扩展 QuantStrategyLab 相关模块的工程师和研究人员。
-- 在阅读详细 runbook 或 workflow 前，需要先理解项目入口的运维人员。
-- 在启用自动化前，需要确认项目职责、安全边界和证据要求的 reviewer。
+## 设计边界
 
-## 当前状态
-
-券商连接相关运维工具；需要谨慎处理凭据和 VM 访问权限。
+- 下游仓库依赖的契约要保持稳定，必要时做版本化。
+- 除非有协同迁移计划，否则优先保持向后兼容。
+- 密钥和环境专属配置不要写进共享库代码。
+- 会影响多个平台或策略包的改动，需要在文档中说明。
 
 ## 仓库结构
 
-- `tests/`：单元测试和契约测试。
-- `.github/workflows/`：CI、定时任务和部署 workflow。
+- `tests/`：单元测试、契约测试和回归测试。
+- `.github/workflows/`：CI、定时任务、发布或部署 workflow。
 - `scripts/`：运维脚本和本地辅助工具。
 
 ## 快速开始
-
-从全新 clone 开始：
 
 ```bash
 python -m pip install -r requirements.txt
 python -m pytest -q
 ```
 
-如果命令需要凭据，请先阅读相关 workflow 或 runbook，并把密钥配置在 Git 之外。
+## 延伸文档
 
-## 部署和运行
-
-在 Git 之外配置 VM 访问、密钥和 gateway 参数。选择受控时间窗口运行部署脚本或 workflow，并在平台执行前确认 gateway 健康状态。
-
-建议先手工运行或 dry-run。只有在日志、产物、权限和回滚步骤都检查过之后，才启用定时任务或 live 执行。
-
-## 策略表现与证据边界
-
-这不是策略仓库。成功标准是 gateway 可用、发布正确、密钥处理安全，以及券商连接稳定。
-
-README 不应该承诺固定收益或过期指标。实际使用前，请重新运行对应测试、回测或流水线任务。
-
-## 安全注意事项
-
-- 不要把 API key、券商凭据、OAuth token、Cookie 或账户标识提交到 Git。
-- 新策略或平台变更在 live 前必须先跑 dry-run 或 paper 流程。
-- 启用定时任务前，需要人工检查生成的订单、产物和日志。
-
-## 参与贡献
-
-请保持改动小、可复现，并用最小必要测试覆盖。涉及策略的改动，需要附上验证行为的证据产物或命令。
+- 暂无独立 `docs/` 目录；请先阅读本 README 和 workflow 文件。
 
 ## 许可证
 
-如仓库包含 [LICENSE](LICENSE)，请以该文件为准。
+详见 [LICENSE](LICENSE)。
