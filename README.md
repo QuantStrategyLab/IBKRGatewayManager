@@ -1,5 +1,36 @@
 # IBKR Gateway Manager
 
+<!-- qsl-doc-overview:start -->
+
+> ⚠️ 投资有风险，不构成投资建议，仅供学习交流用途。
+> ⚠️ Investing involves risk. This project does not provide investment advice and is for educational and research purposes only.
+
+## Open-source overview / 开源项目入口
+
+| Item | Description |
+| --- | --- |
+| Project type | broker gateway ops |
+| What it does | Deployment and lifecycle management for the IBKR Gateway VM, Docker rollout and 2FA watcher setup. |
+| 中文说明 | IBKR Gateway VM 生命周期管理工具，负责 Docker 部署、远端同步和 2FA watcher 配置。 |
+| Current status | Infrastructure operations. Misconfiguration can affect broker connectivity. |
+
+### Quick start
+
+- `python -m pip install -e '.[test]'`
+- `python -m pytest -q`
+
+### Deploy / operate safely
+
+Use staged rollout/remote sync commands only after reviewing VM target, Docker image and 2FA watcher state.
+
+### Strategy performance / evidence boundary
+
+Not a strategy repository; success is gateway availability and safe operational rollback.
+
+> Detailed runbooks, migration notes, workflow internals, and historical decisions are kept below. Start with this overview before using the lower-level operational sections.
+
+<!-- qsl-doc-overview:end -->
+
 > ⚠️ 投资有风险，不构成投资建议，仅供学习交流用途。
 
 [English](#english) | [中文](#中文)
