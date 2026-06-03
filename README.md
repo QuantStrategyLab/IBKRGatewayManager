@@ -1,546 +1,62 @@
-# IBKR Gateway Manager
+# IBKRGatewayManager
 
-<!-- qsl-doc-overview:start -->
+[Chinese README](README.zh-CN.md)
 
-> ⚠️ 投资有风险，不构成投资建议，仅供学习交流用途。
 > ⚠️ Investing involves risk. This project does not provide investment advice and is for educational and research purposes only.
 
-## Open-source overview / 开源项目入口
+## What this project does
 
-| Item | Description |
-| --- | --- |
-| Project type | broker gateway ops |
-| What it does | Deployment and lifecycle management for the IBKR Gateway VM, Docker rollout and 2FA watcher setup. |
-| 中文说明 | IBKR Gateway VM 生命周期管理工具，负责 Docker 部署、远端同步和 2FA watcher 配置。 |
-| Current status | Infrastructure operations. Misconfiguration can affect broker connectivity. |
+IBKRGatewayManager is a **Gateway operations utility** in the QuantStrategyLab ecosystem. It manages deployment and lifecycle tasks for the IBKR gateway VM, including Docker rollout, remote sync, and 2FA watcher setup.
 
-### Quick start
+## Who this is for
 
-- `python -m pip install -e '.[test]'`
-- `python -m pytest -q`
+- Engineers and researchers who want to inspect, reproduce, or extend this part of the QuantStrategyLab stack.
+- Operators who need a clear entry point before reading the deeper runbooks or workflow files.
+- Reviewers who need to understand the repository purpose, safety boundary, and evidence requirements before enabling automation.
 
-### Deploy / operate safely
+## Current status
 
-Use staged rollout/remote sync commands only after reviewing VM target, Docker image and 2FA watcher state.
+Operations utility for broker connectivity; handle credentials and VM access carefully.
 
-### Strategy performance / evidence boundary
+## Repository layout
 
-Not a strategy repository; success is gateway availability and safe operational rollback.
+- `tests/`: unit and contract tests.
+- `.github/workflows/`: CI, scheduled jobs, and deployment workflows.
+- `scripts/`: operator scripts and local helpers.
 
-> Detailed runbooks, migration notes, workflow internals, and historical decisions are kept below. Start with this overview before using the lower-level operational sections.
+## Quick start
 
-<!-- qsl-doc-overview:end -->
-
-> ⚠️ 投资有风险，不构成投资建议，仅供学习交流用途。
-
-[English](#english) | [中文](#中文)
-
----
-
-<a id="english"></a>
-## English
-
-An automated deployment solution for IBKR Gateway on Google Compute Engine (GCE), with automated 2FA and daily reconnect.
-
-> ✅ Current target architecture: **Cloud Run → VPC private IP → GCE host port 4001/4002**.
-
-## Features
-
-- **Containerized Deployment**: Docker-based setup.
-- **Automated 2FA**: Python bot (`pyotp` + `xdotool`) auto-fills TOTP.
-- **Daily Auto-Reconnect**: restart policy for long-running reliability.
-- **API Handshake Recovery**: systemd health check validates the IB API handshake and restarts/recreates the container if the API is not ready.
-- **Private Network API Access**: IBKR API exposed on GCE private network for Cloud Run.
-
----
-
-## Architecture (Updated)
-
-```text
-Cloud Run service
-   │
-   ├─(egress: all-traffic/private-ranges-only)
-   ▼
-Direct VPC egress or Serverless VPC Access connector
-   ▼
-VPC (same region/network path)
-   ▼
-GCE VM (private IP, host port 4001/4002)
-   ▼
-Docker: ib-gateway container (relay on 4003/4004)
-```
-
-For this architecture to work:
-
-1. The base image must expose remote API access through host ports `4001`/`4002`.
-2. Host ports `4001` and `4002` must be published on the VM.
-3. VPC firewall must allow source = Cloud Run/VPC connector CIDR to destination VM TCP `4001` or `4002`.
-4. `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no` must be set so the image enables remote access relay.
-
----
-
-## Quick Start
-
-### 1. Prerequisites
-
-- A Linux GCE VM with Docker + Docker Compose.
-- IBKR account with TOTP 2FA enabled.
-- Cloud Run service and GCE VM attached to reachable VPC network path.
-
-### 2. Configure `.env`
-
-Create `.env` beside `docker-compose.yml`:
+From a fresh clone:
 
 ```bash
-TWS_USERID=your_ibkr_username
-TWS_PASSWORD=your_ibkr_password
-TOTP_SECRET=your_base32_totp_secret
-VNC_SERVER_PASSWORD=your_vnc_password
-TRADING_MODE=live
-TWS_ACCEPT_INCOMING=accept
-READ_ONLY_API=no
-TWOFA_DEVICE=Mobile Authenticator app
-TWOFA_TIMEOUT_ACTION=restart
-RELOGIN_AFTER_TWOFA_TIMEOUT=yes
-EXISTING_SESSION_DETECTED_ACTION=primary
-IBKR_2FA_AUTOFILL=no
-IBKR_2FA_MAX_SUBMISSIONS=1
-JAVA_HEAP_SIZE=512
-
-# Recommended: use the exact CIDR used by your Cloud Run egress path
-# Direct VPC egress: use the subnet CIDR
-# VPC connector: use the connector CIDR
-ACCEPT_API_FROM_IP=10.8.0.0/26
-
-# Must be 'no' for Cloud Run private IP access
-ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
+python -m pip install -r requirements.txt
+python -m pytest -q
 ```
 
-### Shared GitHub Config (Recommended)
+If a command requires credentials, run it only after reading the relevant workflow or runbook and configuring secrets outside Git.
 
-If `InteractiveBrokersPlatform` and `IBKRGatewayManager` share one GitHub-managed config, keep these non-secret values in GitHub Variables. For one gateway, the legacy `IB_GATEWAY_*` variables are enough:
+## Deployment and operation
 
-```bash
-IB_GATEWAY_INSTANCE_NAME=interactive-brokers-quant-instance
-IB_GATEWAY_ZONE=us-central1-c
-IB_GATEWAY_MODE=paper
-IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR=10.128.0.0/20
-IB_GATEWAY_GCE_USER=zwlddx0815
-IB_GATEWAY_DEPLOY_PATH=/home/zwlddx0815/ib-docker
-IB_GATEWAY_CONTAINER_NAME=ib-gateway
-IB_GATEWAY_LIVE_HOST_PORT=4001
-IB_GATEWAY_PAPER_HOST_PORT=4002
-IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
-IB_GATEWAY_TWS_ACCEPT_INCOMING=accept
-IB_GATEWAY_READ_ONLY_API=no
-IB_GATEWAY_TWOFA_DEVICE=Mobile Authenticator app
-IB_GATEWAY_2FA_AUTOFILL=no
-```
+Configure VM access, secrets, and gateway settings outside Git. Run deployment scripts or workflows in a controlled window and verify gateway health before platform execution.
 
-The workflow maps these shared values to the gateway container's `.env`:
+Prefer manual or dry-run execution first. Enable schedules or live execution only after logs, artifacts, permissions, and rollback steps are reviewed.
 
-- `IB_GATEWAY_MODE` -> `TRADING_MODE`
-- `IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR` -> `ACCEPT_API_FROM_IP`
-- `IB_GATEWAY_INSTANCE_NAME` -> `GCE_INSTANCE_NAME`
-- `IB_GATEWAY_ZONE` -> `GCE_ZONE`
-- `IB_GATEWAY_GCE_USER` -> `GCE_USER`
-- `IB_GATEWAY_DEPLOY_PATH` -> `DEPLOY_PATH`
-- `IB_GATEWAY_CONTAINER_NAME` -> Docker container name
-- `IB_GATEWAY_LIVE_HOST_PORT` / `IB_GATEWAY_PAPER_HOST_PORT` -> host API ports
-- `IB_GATEWAY_TWOFA_DEVICE` -> `TWOFA_DEVICE`
-- `IB_GATEWAY_2FA_AUTOFILL` -> `IBKR_2FA_AUTOFILL`
+## Strategy performance and evidence
 
-`ACCEPT_API_FROM_IP` is intentionally treated as required now. For manual `docker compose` usage, if you forget to set it, Compose will fail fast instead of starting a gateway that Cloud Run can never reach.
+Not a strategy repository. Success is gateway availability, correct rollout, secure secret handling, and reliable broker connectivity.
 
-This shared GitHub config is scoped to the **IBKR deployment pair only** (`InteractiveBrokersPlatform` + `IBKRGatewayManager`). It should not be treated as a platform-wide secret set for unrelated quant projects. The gateway workflow now authenticates to GCP with **GitHub OIDC + Workload Identity Federation** instead of a long-lived `GCP_SA_KEY`.
+README files are intentionally not a source of dated performance promises. Re-run the relevant tests, backtests, or pipeline jobs before relying on any result.
 
-For multiple gateway VMs or multiple IBKR usernames, prefer one repository variable named `IB_GATEWAY_TARGETS_JSON`. It contains only routing/config metadata; credentials still live in GitHub Secrets or Secret Manager:
+## Safety notes
 
-```json
-{
-  "paper-example": {
-    "gcp_project_id": "my-gcp-project",
-    "gcp_workload_identity_provider": "projects/123456789/locations/global/workloadIdentityPools/github-actions/providers/github-ibkr-gateway-main",
-    "gcp_workload_identity_service_account": "ibkr-gateway-deploy@my-gcp-project.iam.gserviceaccount.com",
-    "gce_user": "ubuntu",
-    "gce_instance_name": "ibkr-gateway-paper",
-    "gce_zone": "us-central1-c",
-    "deploy_path": "/opt/ibkr-gateway-paper",
-    "mode": "paper",
-    "container_name": "ib-gateway",
-    "compose_project_name": "ibkr-gateway-paper",
-    "compose_service_name": "ib-gateway",
-    "cloud_run_egress_cidr": "10.0.0.0/8",
-    "allow_connections_from_localhost_only": "no",
-    "tws_accept_incoming": "accept",
-    "read_only_api": "no",
-    "ibkr_2fa_autofill": "no",
-    "ssh_private_key_secret_name": "ib-gateway-paper-ssh-private-key",
-    "tws_userid_secret_name": "ib-gateway-paper-tws-userid",
-    "tws_password_secret_name": "ib-gateway-paper-tws-password",
-    "vnc_server_password_secret_name": "ib-gateway-paper-vnc-server-password"
-  }
-}
-```
+- Never commit API keys, broker credentials, OAuth tokens, cookies, or account identifiers.
+- Run new strategies and platform changes in dry-run or paper mode before any live execution.
+- Review generated orders, artifacts, and logs manually before enabling schedules.
 
-Manual workflow dispatch accepts `target=all` or a specific key from `IB_GATEWAY_TARGETS_JSON`. Scheduled keepalive and push deployments run all configured targets sequentially.
+## Contributing
 
-### 3. Start IBKR Gateway
-
-```bash
-docker compose up -d --build
-sudo bash ./scripts/install_2fa_bot_watcher.sh
-sudo bash ./scripts/install_gateway_health_watcher.sh
-```
-
-> If you use this repository's GitHub Actions workflow, pushing deploy-related changes to `main` triggers a full deployment to GCE. The daily scheduled run only does a lightweight keepalive start and watcher check; it does not rebuild the Docker image.
-
-> Manual `workflow_dispatch` defaults to `keepalive`. If you really need to rebuild the image, choose `deploy_mode=full` when dispatching it.
-
-The deploy workflow uploads a source archive from the GitHub runner to the VM. The VM does not need GitHub credentials or a checked-out private repository to receive updates.
-
-### Multiple Gateway Sessions on One VM
-
-The default deployment remains one container named `ib-gateway` exposing live/paper API ports `4001`/`4002`. To run another IBKR username on the same VM, use a separate deploy directory or `COMPOSE_PROJECT_NAME`, and give that instance unique container and host ports:
-
-```bash
-IB_GATEWAY_CONTAINER_NAME=ib-gateway-u1234567
-COMPOSE_PROJECT_NAME=ib-gateway-u1234567
-IB_GATEWAY_LIVE_HOST_PORT=4011
-IB_GATEWAY_PAPER_HOST_PORT=4012
-IB_GATEWAY_UNIT_SUFFIX=u1234567
-```
-
-The compose service name stays `ib-gateway` unless you intentionally change the YAML service key. The scripts use `IB_GATEWAY_COMPOSE_SERVICE_NAME` for compose operations and `IB_GATEWAY_CONTAINER_NAME` for `docker exec`/health checks. Systemd watcher units are suffixed automatically when the container name is not the default, so multiple Gateway sessions do not overwrite each other's timers.
-
-### 4. Verify on GCE VM
-
-```bash
-docker compose ps
-ss -lntp | grep -E '4001|4002'
-```
-
-Expected: host is listening on `0.0.0.0:4001` and/or `0.0.0.0:4002` (or VM private interface) and container is healthy.
-
-The readiness script checks the actual IB API handshake, not just TCP connectivity:
-
-```bash
-sudo bash ./scripts/wait_for_ib_gateway_ready.sh paper
-```
-
-It opens an IB protocol session, waits for the Gateway handshake, sends `StartApi`,
-and only succeeds after `nextValidId` plus `managedAccounts` have arrived. This
-catches the common failure mode where the Docker port is listening but Gateway is
-blocked by a login/API prompt.
-
----
-
-## Cloud Run Connectivity Checklist
-
-1. Cloud Run service uses **Direct VPC egress** or **Serverless VPC Access connector**.
-2. Cloud Run egress is configured correctly (`all-traffic` or `private-ranges-only`, depending on your route design).
-3. Firewall rule allows the Direct VPC subnet CIDR or connector CIDR to VM TCP `4001` for `live` or `4002` for `paper`.
-4. Application uses `GCE_PRIVATE_IP:4001` for `live` or `GCE_PRIVATE_IP:4002` for `paper`.
-
----
-
-## Recreate GCE and Deploy (Recommended Flow)
-
-When recreating your VM, use this order:
-
-1. **Create GCE VM** (Ubuntu recommended) in the same VPC/region path reachable from Cloud Run.
-2. **Install Docker + Docker Compose plugin** on the VM.
-3. **Clone this repo** to your target path (for example `/home/<user>/ib-docker`).
-4. **Set GitHub Secrets** so Action can redeploy automatically.
-5. **Push deploy-related changes to `main`** to trigger a full deployment workflow.
-
-### GitHub Config for Auto Deploy
-
-**GitHub Authentication**
-
-This workflow now uses **GitHub OIDC + Workload Identity Federation** for Google Cloud auth. You do **not** need `GCP_SA_KEY` anymore.
-
-**GitHub Secrets**
-
-| Secret | Purpose |
-| :--- | :--- |
-| `SSH_PRIVATE_KEY` | SSH private key for VM login |
-| `TWS_USERID` | IBKR username |
-| `TWS_PASSWORD` | IBKR password |
-| `TOTP_SECRET` | IBKR TOTP secret |
-| `VNC_SERVER_PASSWORD` | VNC password |
-
-**Optional GitHub Variables for Secret Manager**
-
-If you want to stop storing the gateway credentials in GitHub Secrets, set these variables to Secret Manager secret names in project `interactivebrokersquant`. When a `*_SECRET_NAME` variable is present, the workflow reads the latest secret version from Secret Manager; otherwise it falls back to the matching GitHub secret.
-
-If you temporarily keep the values in GitHub Secrets during migration, you can run the workflow manually with `sync_github_secrets_to_secret_manager=true` once, then delete the GitHub Secrets after verification.
-
-When `IB_GATEWAY_TARGETS_JSON` is used, each target can point to different Secret Manager secret names and even different GCP projects. `TOTP_SECRET` is only required when `ibkr_2fa_autofill` is set to `yes`, `true`, or `1`.
-
-| Variable | Reads secret value for |
-| :--- | :--- |
-| `IB_GATEWAY_SSH_PRIVATE_KEY_SECRET_NAME` | `SSH_PRIVATE_KEY` |
-| `IB_GATEWAY_TWS_USERID_SECRET_NAME` | `TWS_USERID` |
-| `IB_GATEWAY_TWS_PASSWORD_SECRET_NAME` | `TWS_PASSWORD` |
-| `IB_GATEWAY_TOTP_SECRET_SECRET_NAME` | `TOTP_SECRET` |
-| `IB_GATEWAY_VNC_SERVER_PASSWORD_SECRET_NAME` | `VNC_SERVER_PASSWORD` |
-
-**GitHub Variables (recommended shared config)**
-
-| Variable | Purpose |
-| :--- | :--- |
-| `IB_GATEWAY_GCE_USER` | VM SSH username (for example `zwlddx0815`) |
-| `IB_GATEWAY_DEPLOY_PATH` | Repo path on VM (for example `/home/zwlddx0815/ib-docker`) |
-| `IB_GATEWAY_INSTANCE_NAME` | VM instance name |
-| `IB_GATEWAY_ZONE` | VM zone |
-| `IB_GATEWAY_MODE` | `paper` or `live` |
-| `IB_GATEWAY_CONTAINER_NAME` | Optional Docker container name. Defaults to `ib-gateway`. Use a unique value per Gateway session. |
-| `IB_GATEWAY_COMPOSE_PROJECT_NAME` | Optional compose project name. Use this or a unique deploy path when running multiple sessions on one VM. |
-| `IB_GATEWAY_COMPOSE_SERVICE_NAME` | Optional compose service name. Defaults to `ib-gateway`; only change it if the compose service key changes. |
-| `IB_GATEWAY_UNIT_SUFFIX` | Optional systemd suffix. Inferred from non-default container names when unset. |
-| `IB_GATEWAY_LIVE_HOST_PORT` | Optional host port mapped to container live API port `4003`. Defaults to `4001`. |
-| `IB_GATEWAY_PAPER_HOST_PORT` | Optional host port mapped to container paper API port `4004`. Defaults to `4002`. |
-| `IB_GATEWAY_CLOUD_RUN_EGRESS_CIDR` | Cloud Run Direct VPC egress or connector CIDR (example `10.8.0.0/26`) |
-| `IB_GATEWAY_ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY` | Set to `no` for Cloud Run private IP access |
-| `IB_GATEWAY_TWS_ACCEPT_INCOMING` | Optional. Recommended `accept`. |
-| `IB_GATEWAY_READ_ONLY_API` | Optional. Recommended `no` if this service places trades. |
-| `IB_GATEWAY_TWOFA_DEVICE` | Optional. Exact IBC 2FA device name, for example `Mobile Authenticator app` for the authenticator-code prompt or `IB Key` for IBKR Mobile push. |
-| `IB_GATEWAY_2FA_AUTOFILL` | Optional. Set to `no` while validating the configured TOTP secret or when using IBKR Mobile push instead of local TOTP auto-fill. |
-| `IBKR_2FA_MAX_SUBMISSIONS` | Optional container env. Defaults to `1` so an invalid TOTP secret does not keep submitting codes. |
-
-The current VM is an `e2-micro`, so the deployment intentionally sets `JAVA_HEAP_SIZE=512`
-by default and enables a 2 GiB host swap file during keepalive/deploy. Without this,
-the upstream gateway image's default `-Xmx768m` can leave too little memory for sshd,
-Docker, and the GCE guest agent. For better long-running stability, use at least
-`e2-small` / `e2-medium` instead of relying only on swap.
-
-This repository also overrides the upstream headless startup script so Gateway runs with
-`Xvfb :1 -screen 0 1024x768x24` and `x11vnc -noxdamage`. On the current GCE target, the
-upstream `16bpp` display frequently led to black VNC output and intermittent IBC window
-detection failures before login completed.
-
-The image also raises `LoginDialogDisplayTimeout` from `60` to `180` seconds in both
-`/home/ibgateway/ibc/config.ini` and `config.ini.tmpl`. Keepalive recovery on the current
-GCE target has occasionally needed longer than the upstream default before IBC can detect
-the login/config dialog and drive Gateway back to an API-ready state.
-
-The watcher also dismisses the post-login `Login Messages` dialog by default so API
-readiness is not blocked after a successful login. Set `IBKR_DISMISS_LOGIN_MESSAGES=no`
-if you need to inspect that dialog manually.
-
-For direct `docker compose` usage outside GitHub Actions, `ACCEPT_API_FROM_IP` must still be set explicitly in `.env`; there is no longer a silent default CIDR.
-
-These GitHub secrets are specific to this repository's deployment flow. They are not intended to be global secrets shared by every quant repository.
-
----
-
-## Operational Commands
-
-### View 2FA Bot Logs
-
-```bash
-docker exec ib-gateway tail -f /home/ibgateway/2fa.log
-```
-
-### Check Bot Process
-
-```bash
-docker exec ib-gateway pgrep -f 2fa_bot.py
-```
-
-### Check Watcher Timer
-
-```bash
-systemctl status ibkr-2fa-bot.timer --no-pager
-```
-
-### Check Gateway API Health Timers
-
-```bash
-systemctl status ibkr-gateway-healthcheck.timer --no-pager
-systemctl status ibkr-gateway-daily-restart.timer --no-pager
-```
-
-`ibkr-gateway-healthcheck.timer` runs every 5 minutes by default. It calls
-`recover_ib_gateway_ready.sh`, which first checks IB API handshake readiness,
-then restarts and finally recreates the container if the API does not recover.
-
-`ibkr-gateway-daily-restart.timer` restarts the Gateway once per day at
-`10:30 UTC` by default, then waits for the same API handshake readiness. Missed
-daily restart times are not replayed when the timer is started manually, so
-re-enabling the timer during a maintenance window does not immediately restart
-an already-authenticated Gateway. Override the schedule during install with:
-
-```bash
-IB_GATEWAY_DAILY_RESTART_ON_CALENDAR='Mon..Fri 10:30:00 UTC' sudo bash ./scripts/install_gateway_health_watcher.sh
-```
-
-### Check API Port in Container
-
-```bash
-docker exec ib-gateway sh -lc 'command -v ss >/dev/null && ss -lntp | grep -E "4003|4004" || netstat -lntp | grep -E "4003|4004"'
-```
-
----
-
-## Security Notes
-
-- Do **not** set `ACCEPT_API_FROM_IP=0.0.0.0/0` in production.
-- Restrict firewall source to only your Cloud Run/VPC connector CIDR.
-- Keep VNC (`5900`) localhost-bound or tunnel-only.
-
----
-
-## Troubleshooting
-
-### Cloud Run cannot connect to `GCE_PRIVATE_IP:4001` or `GCE_PRIVATE_IP:4002`
-
-- Confirm VM firewall rule exists for source connector CIDR -> TCP 4001 (`live`) or TCP 4002 (`paper`).
-- Confirm `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no`. This is equivalent to disabling the IB Gateway GUI option that only accepts localhost API clients.
-- Confirm `TWS_ACCEPT_INCOMING=accept` so incoming API sessions are auto-accepted.
-- Confirm `READ_ONLY_API=no` if the strategy must place live or paper orders.
-- Confirm Docker published ports are `4001:4003` and `4002:4004`.
-- Confirm the application uses `4001` for `live` and `4002` for `paper`.
-- Confirm service and connector are in compatible region/network routing setup.
-
-### 2FA bot not filling code
-
-- Check logs: `docker exec ib-gateway tail -f /home/ibgateway/2fa.log`
-- Verify `TOTP_SECRET` is valid Base32 secret.
-- Confirm watcher timer is active: `systemctl status ibkr-2fa-bot.timer --no-pager`
-
----
+Keep changes small, reproducible, and covered by the narrowest useful tests. For strategy-facing changes, include the evidence artifact or command used to validate behavior.
 
 ## License
 
-MIT
-
----
-
-<a id="中文"></a>
-## 中文
-
-IBKR Gateway Manager 用于在 Google Compute Engine (GCE) 上自动部署和维护 IBKR Gateway，并提供自动 2FA、每日重连和 API readiness 检查。
-
-目标架构：
-
-```text
-Cloud Run service
-   │
-   ├─(egress: all-traffic/private-ranges-only)
-   ▼
-Direct VPC egress or Serverless VPC Access connector
-   ▼
-VPC (same region/network path)
-   ▼
-GCE VM (private IP, host port 4001/4002)
-   ▼
-Docker: ib-gateway container (relay on 4003/4004)
-```
-
-## 功能
-
-- **容器化部署**：基于 Docker / Docker Compose。
-- **自动 2FA**：Python bot 使用 `pyotp` 和 `xdotool` 自动填写 TOTP。
-- **每日自动重连**：通过 restart policy 提升长期运行稳定性。
-- **API 握手恢复**：systemd health check 验证 IB API handshake，API 未就绪时重启或重建容器。
-- **私网 API 访问**：把 IBKR API 暴露在 GCE 私网，供 Cloud Run 访问。
-
-## 快速开始
-
-### 1. 前置条件
-
-- 一台安装了 Docker 和 Docker Compose 的 Linux GCE VM。
-- 已启用 TOTP 2FA 的 IBKR 账户。
-- Cloud Run service 和 GCE VM 位于可互通的 VPC 网络路径。
-
-### 2. 配置 `.env`
-
-在 `docker-compose.yml` 旁创建 `.env`：
-
-```bash
-TWS_USERID=your_ibkr_username
-TWS_PASSWORD=your_ibkr_password
-TOTP_SECRET=your_base32_totp_secret
-VNC_SERVER_PASSWORD=your_vnc_password
-TRADING_MODE=live
-TWS_ACCEPT_INCOMING=accept
-READ_ONLY_API=no
-TWOFA_DEVICE=Mobile Authenticator app
-TWOFA_TIMEOUT_ACTION=restart
-RELOGIN_AFTER_TWOFA_TIMEOUT=yes
-EXISTING_SESSION_DETECTED_ACTION=primary
-IBKR_2FA_AUTOFILL=no
-IBKR_2FA_MAX_SUBMISSIONS=1
-JAVA_HEAP_SIZE=512
-
-ACCEPT_API_FROM_IP=10.8.0.0/26
-ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no
-```
-
-`ACCEPT_API_FROM_IP` 应设置为 Cloud Run 出口路径使用的 CIDR：Direct VPC egress 通常使用 subnet CIDR，VPC connector 使用 connector CIDR。
-
-### 3. 启动 IBKR Gateway
-
-```bash
-docker compose up -d --build
-sudo bash ./scripts/install_2fa_bot_watcher.sh
-sudo bash ./scripts/install_gateway_health_watcher.sh
-```
-
-如果使用本仓库的 GitHub Actions workflow，推送部署相关变更到 `main` 会触发完整部署。每日计划任务只做轻量 keepalive 和 watcher check，不重建 Docker image。
-
-### 4. 在 GCE VM 上验证
-
-```bash
-docker compose ps
-ss -lntp | grep -E '4001|4002'
-sudo bash ./scripts/wait_for_ib_gateway_ready.sh paper
-```
-
-readiness 脚本检查真实 IB API handshake，而不仅仅是 TCP 端口是否打开，因此可以发现 Gateway 被登录/API prompt 卡住的情况。
-
-## Cloud Run 连通性检查
-
-1. Cloud Run 使用 Direct VPC egress 或 Serverless VPC Access connector。
-2. Cloud Run egress 配置正确，按网络设计选择 `all-traffic` 或 `private-ranges-only`。
-3. 防火墙允许 Direct VPC subnet CIDR 或 connector CIDR 访问 VM TCP `4001`（live）或 `4002`（paper）。
-4. 应用使用 `GCE_PRIVATE_IP:4001` 或 `GCE_PRIVATE_IP:4002` 连接 Gateway。
-
-## 运维命令
-
-查看 2FA bot 日志：
-
-```bash
-docker exec ib-gateway tail -f /home/ibgateway/2fa.log
-```
-
-检查 watcher timer：
-
-```bash
-systemctl status ibkr-2fa-bot.timer --no-pager
-systemctl status ibkr-gateway-healthcheck.timer --no-pager
-systemctl status ibkr-gateway-daily-restart.timer --no-pager
-```
-
-## 安全注意事项
-
-- 生产环境不要设置 `ACCEPT_API_FROM_IP=0.0.0.0/0`。
-- 防火墙 source 只允许 Cloud Run / VPC connector CIDR。
-- VNC (`5900`) 应限制为 localhost-bound 或只通过 tunnel 访问。
-
-## 故障排查
-
-如果 Cloud Run 无法连接 `GCE_PRIVATE_IP:4001` 或 `GCE_PRIVATE_IP:4002`：
-
-- 确认 VM firewall rule 允许 connector CIDR 访问 TCP 4001（live）或 TCP 4002（paper）。
-- 确认 `ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY=no`。
-- 确认 `TWS_ACCEPT_INCOMING=accept`。
-- 如果策略需要下单，确认 `READ_ONLY_API=no`。
-- 确认 Docker published ports 是 `4001:4003` 和 `4002:4004`。
-- 确认应用在 live 使用 `4001`，paper 使用 `4002`。
-
-## 许可证
-
-MIT
+See [LICENSE](LICENSE) if present in this repository.
