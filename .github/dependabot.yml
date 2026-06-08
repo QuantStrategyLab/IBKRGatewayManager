@@ -18,6 +18,9 @@ updates:
   - dependency-name: "*"
     update-types:
     - "version-update:semver-major"
+  - dependency-name: "gnzsnz/ib-gateway"
+    versions:
+    - "10.47.1d"
 - package-ecosystem: "github-actions"
   directory: "/"
   schedule:
