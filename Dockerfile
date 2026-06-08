@@ -1,4 +1,4 @@
-FROM gnzsnz/ib-gateway:10.47.1c
+FROM gnzsnz/ib-gateway:10.47.1d
 
 USER root
 RUN apt-get update && \
