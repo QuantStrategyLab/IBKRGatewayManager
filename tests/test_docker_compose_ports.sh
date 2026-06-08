@@ -51,4 +51,26 @@ grep -Fq '      - ACCEPT_API_FROM_IP=${ACCEPT_API_FROM_IP:?Set ACCEPT_API_FROM_I
 
 grep -Fq 'INPUT_CLICK_POSITION = (0.50, 0.40)' "$repo_dir/2fa_bot.py"
 grep -Fq 'MIN_TOTP_SECONDS_REMAINING = 15' "$repo_dir/2fa_bot.py"
+grep -Fq 'SMALL_GATEWAY_DIALOG_MAX_WIDTH = 650' "$repo_dir/2fa_bot.py"
+grep -Fq 'SMALL_GATEWAY_DIALOG_MAX_HEIGHT = 220' "$repo_dir/2fa_bot.py"
+grep -Fq 'def is_small_gateway_dialog(title, width, height):' "$repo_dir/2fa_bot.py"
+grep -Fq 'is_dismissible_dialog_candidate(title, width, height)' "$repo_dir/2fa_bot.py"
 grep -Fq 'def type_totp_into_active_window(code):' "$repo_dir/2fa_bot.py"
+
+REPO_DIR="$repo_dir" python3 <<'PY'
+import importlib.util
+import os
+import sys
+import types
+
+sys.modules["pyotp"] = types.SimpleNamespace()
+module_path = os.path.join(os.environ["REPO_DIR"], "2fa_bot.py")
+spec = importlib.util.spec_from_file_location("ibkr_2fa_bot_test", module_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+assert module.is_dismissible_dialog_candidate("Login Messages")
+assert module.is_dismissible_dialog_candidate("IBKR Gateway", 509, 131)
+assert not module.is_dismissible_dialog_candidate("IBKR Gateway", 700, 550)
+assert not module.is_dismissible_dialog_candidate("IBKR Gateway", 790, 610)
+PY
