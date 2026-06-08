@@ -37,6 +37,15 @@ DISMISS_LOGIN_MESSAGES = os.environ.get("IBKR_DISMISS_LOGIN_MESSAGES", "yes").st
     "no",
     "off",
 }
+DISMISS_SMALL_GATEWAY_DIALOGS = os.environ.get(
+    "IBKR_DISMISS_SMALL_GATEWAY_DIALOGS",
+    "yes",
+).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 
 # Window titles to search for 2FA prompts. Live IBKR accounts can show mobile
 # push / IB Key wording instead of the shorter TOTP-oriented prompts.
@@ -71,10 +80,14 @@ IGNORED_TITLE_KEYWORDS = (
 )
 DISMISSIBLE_DIALOG_SEARCH_PATTERNS = [
     "Login Messages",
+    "IBKR Gateway",
 ]
 DISMISSIBLE_DIALOG_TITLE_KEYWORDS = (
     "login messages",
 )
+SMALL_GATEWAY_DIALOG_TITLE = "ibkr gateway"
+SMALL_GATEWAY_DIALOG_MAX_WIDTH = 650
+SMALL_GATEWAY_DIALOG_MAX_HEIGHT = 220
 # Current IBKR Gateway TOTP prompts place the code field in the upper half of
 # the compact dialog. Keep the click centered on the text field instead of the
 # button/link area below it.
@@ -205,9 +218,21 @@ def is_auth_candidate(title):
     return any(keyword in normalized_title for keyword in AUTH_TITLE_KEYWORDS)
 
 
-def is_dismissible_dialog_candidate(title):
+def is_small_gateway_dialog(title, width, height):
+    if not DISMISS_SMALL_GATEWAY_DIALOGS:
+        return False
+    if title.lower() != SMALL_GATEWAY_DIALOG_TITLE:
+        return False
+    if not width or not height:
+        return False
+    return width <= SMALL_GATEWAY_DIALOG_MAX_WIDTH and height <= SMALL_GATEWAY_DIALOG_MAX_HEIGHT
+
+
+def is_dismissible_dialog_candidate(title, width=None, height=None):
     normalized_title = title.lower()
-    return any(keyword in normalized_title for keyword in DISMISSIBLE_DIALOG_TITLE_KEYWORDS)
+    if any(keyword in normalized_title for keyword in DISMISSIBLE_DIALOG_TITLE_KEYWORDS):
+        return True
+    return is_small_gateway_dialog(title, width, height)
 
 
 def find_windows_by_patterns(patterns):
@@ -243,9 +268,9 @@ def find_dismissible_dialogs():
     candidates = []
     for window_id in reversed(find_windows_by_patterns(DISMISSIBLE_DIALOG_SEARCH_PATTERNS)):
         title = get_window_title(window_id)
-        if not is_dismissible_dialog_candidate(title):
-            continue
         width, height = get_window_geometry(window_id)
+        if not is_dismissible_dialog_candidate(title, width, height):
+            continue
         candidates.append(WindowCandidate(window_id, title, width, height))
     return candidates
 
