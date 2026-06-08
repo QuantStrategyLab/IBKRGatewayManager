@@ -9,6 +9,12 @@ gateway_mode="${1:-${IB_GATEWAY_MODE:-paper}}"
 initial_wait_seconds="${IB_GATEWAY_RECOVERY_INITIAL_WAIT_SECONDS:-240}"
 restart_wait_seconds="${IB_GATEWAY_RECOVERY_RESTART_WAIT_SECONDS:-300}"
 recreate_wait_seconds="${IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS:-600}"
+# IBC can spend several minutes in first-run login/config flows and then
+# restart itself before the API socket listens. Do not interrupt that progress.
+progress_wait_seconds="${IB_GATEWAY_RECOVERY_PROGRESS_WAIT_SECONDS:-420}"
+progress_extensions="${IB_GATEWAY_RECOVERY_PROGRESS_EXTENSIONS:-2}"
+progress_window_seconds="${IB_GATEWAY_RECOVERY_PROGRESS_WINDOW_SECONDS:-420}"
+progress_regex="${IB_GATEWAY_RECOVERY_PROGRESS_REGEX:-IBC: (Starting Gateway|Login attempt|Second Factor Authentication|Login has completed|Configuration tasks completed|Found Gateway main window|Getting config dialog|Getting main window)|Authentication window found|Auto-fill submitted|Dismissing post-login dialog}"
 lock_file="${IB_GATEWAY_RECOVERY_LOCK_FILE:-/var/lock/ib_gateway_recovery.lock}"
 lock_wait_seconds="${IB_GATEWAY_RECOVERY_LOCK_WAIT_SECONDS:-900}"
 
@@ -35,6 +41,35 @@ wait_for_ready() {
     bash "${script_dir}/wait_for_ib_gateway_ready.sh" "${gateway_mode}"
 }
 
+gateway_recently_progressing() {
+  docker logs --since "${progress_window_seconds}s" "${container_name}" 2>&1 \
+    | grep -Eiq "${progress_regex}"
+}
+
+wait_for_ready_with_progress() {
+  local timeout_seconds="$1"
+  local stage="$2"
+  local extension=0
+
+  if wait_for_ready "${timeout_seconds}"; then
+    return 0
+  fi
+
+  while [ "${extension}" -lt "${progress_extensions}" ]; do
+    if ! gateway_recently_progressing; then
+      return 1
+    fi
+
+    extension=$((extension + 1))
+    echo "Recent IB gateway login/config progress detected after ${stage} wait; extending readiness wait (${extension}/${progress_extensions}) by ${progress_wait_seconds}s before external recovery." >&2
+    if wait_for_ready "${progress_wait_seconds}"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 ensure_2fa_bot_running() {
   CONTAINER_NAME="${container_name}" bash "${script_dir}/ensure_2fa_bot_running.sh"
 }
@@ -43,7 +78,7 @@ echo "Ensuring ${container_name} is running before readiness check."
 docker compose up -d --no-build "${compose_service_name}"
 ensure_2fa_bot_running
 
-if wait_for_ready "${initial_wait_seconds}"; then
+if wait_for_ready_with_progress "${initial_wait_seconds}" "initial"; then
   exit 0
 fi
 
@@ -52,7 +87,7 @@ docker compose ps >&2 || true
 docker compose restart "${compose_service_name}"
 ensure_2fa_bot_running
 
-if wait_for_ready "${restart_wait_seconds}"; then
+if wait_for_ready_with_progress "${restart_wait_seconds}" "restart"; then
   exit 0
 fi
 
@@ -60,7 +95,7 @@ echo "IB gateway API is still not ready; recreating ${container_name} and retryi
 docker compose up -d --force-recreate --no-build "${compose_service_name}"
 ensure_2fa_bot_running
 
-if wait_for_ready "${recreate_wait_seconds}"; then
+if wait_for_ready_with_progress "${recreate_wait_seconds}" "recreate"; then
   exit 0
 fi
 
