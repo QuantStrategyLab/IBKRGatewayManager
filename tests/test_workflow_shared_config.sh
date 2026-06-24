@@ -79,8 +79,15 @@ grep -Fq 'sudo systemctl status "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" --no-pager'
 grep -Fq 'sudo systemctl status "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" --no-pager' "$workflow_file"
 grep -Fq 'Full deploy mode: rebuilding container' "$workflow_file"
 
-mapfile -t recover_lines < <(grep -nF "bash ./scripts/recover_ib_gateway_ready.sh '\${IB_GATEWAY_MODE}'" "$workflow_file" | cut -d: -f1)
-mapfile -t health_watcher_lines < <(grep -nF 'bash ./scripts/install_gateway_health_watcher.sh' "$workflow_file" | cut -d: -f1)
+recover_lines=()
+while IFS= read -r line_number; do
+  recover_lines+=("$line_number")
+done < <(grep -nF "bash ./scripts/recover_ib_gateway_ready.sh '\${IB_GATEWAY_MODE}'" "$workflow_file" | cut -d: -f1)
+
+health_watcher_lines=()
+while IFS= read -r line_number; do
+  health_watcher_lines+=("$line_number")
+done < <(grep -nF 'bash ./scripts/install_gateway_health_watcher.sh' "$workflow_file" | cut -d: -f1)
 test "${#recover_lines[@]}" -eq 2
 test "${#health_watcher_lines[@]}" -eq 2
 for i in 0 1; do
