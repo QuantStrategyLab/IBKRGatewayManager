@@ -558,8 +558,6 @@ jobs:
           SOURCE_ARCHIVE="$RUNNER_TEMP/ibkr-gateway-source.tar.gz"
           REMOTE_ARCHIVE="/tmp/ibkr-gateway-${TARGET_NAME}-${GITHUB_SHA}.tar.gz"
           git archive --format=tar.gz --output="${SOURCE_ARCHIVE}" HEAD
-          log_step "Uploading source archive to ${REMOTE_ARCHIVE}"
-          copy_remote_file "${SOURCE_ARCHIVE}" "${REMOTE_ARCHIVE}"
 
           REMOTE_SYNC_COMMAND=$(cat <<EOF
           set -euo pipefail
@@ -578,10 +576,16 @@ jobs:
           EOF
           )
 
-          log_step "Syncing repository to ${DEPLOY_PATH}"
-          run_remote_ssh "Repository sync" "${REMOTE_SYNC_COMMAND}"
-          log_step "Uploading runtime env file"
-          copy_remote_file "${ENV_FILE}" "${DEPLOY_PATH}/.env"
+          prepare_remote_workspace() {
+            log_step "Uploading source archive to ${REMOTE_ARCHIVE}"
+            copy_remote_file "${SOURCE_ARCHIVE}" "${REMOTE_ARCHIVE}"
+            log_step "Syncing repository to ${DEPLOY_PATH}"
+            run_remote_ssh "Repository sync" "${REMOTE_SYNC_COMMAND}"
+            log_step "Uploading runtime env file"
+            copy_remote_file "${ENV_FILE}" "${DEPLOY_PATH}/.env"
+          }
+
+          prepare_remote_workspace
 
           DEPLOY_MODE="full"
           if [ "${DEPLOY_EVENT_NAME}" = "schedule" ]; then
@@ -601,10 +605,19 @@ jobs:
           . ./scripts/ibkr_gateway_units.sh
           container_name="\${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}"
           compose_service_name="\${IB_GATEWAY_COMPOSE_SERVICE_NAME:-ib-gateway}"
+          compose_project_name="\${COMPOSE_PROJECT_NAME:-\${IB_GATEWAY_COMPOSE_PROJECT_NAME:-}}"
+          if [ -z "\${compose_project_name}" ]; then
+            compose_project_name="\$(basename "\$PWD")"
+          fi
+          compose_image="\${compose_project_name}-\${compose_service_name}:latest"
           resolve_ibkr_gateway_unit_names "\${container_name}" "\${IB_GATEWAY_UNIT_SUFFIX:-}"
           sudo systemctl stop "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "\${IBKR_GATEWAY_HEALTHCHECK_SERVICE}" 2>/dev/null || true
           sudo systemctl stop "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" "\${IBKR_GATEWAY_DAILY_RESTART_SERVICE}" 2>/dev/null || true
           sudo bash ./scripts/ensure_host_swap.sh
+          if ! sudo docker image inspect "\${compose_image}" >/dev/null 2>&1; then
+            echo "[\$(date -u +%FT%TZ)] Keepalive fallback: image \${compose_image} is missing, building only \${compose_service_name}"
+            sudo docker compose build "\${compose_service_name}"
+          fi
           sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_2fa_bot_watcher.sh
           sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
           sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_gateway_health_watcher.sh '${IB_GATEWAY_MODE}'
@@ -649,4 +662,11 @@ jobs:
           fi
 
           log_step "Running remote deploy commands for event ${DEPLOY_EVENT_NAME} in mode ${DEPLOY_MODE}"
-          run_remote_ssh "Remote deploy" "${REMOTE_DEPLOY_COMMAND}"
+          if gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DEPLOY_COMMAND}"; then
+            exit 0
+          fi
+
+          log_step "Remote deploy failed; resetting VM, re-preparing workspace, and retrying once"
+          reset_instance_and_wait_for_ssh
+          prepare_remote_workspace
+          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DEPLOY_COMMAND}"
