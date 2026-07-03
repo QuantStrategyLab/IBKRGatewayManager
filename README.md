@@ -34,6 +34,13 @@ python -m pytest -q
 
 - No separate `docs/` directory yet; start with this README and the workflow files.
 
+## QSL Compatibility Metadata
+
+- Added `qsl.toml` to participate in the runtime compatibility matrix with `tier = "runtime-ops"`, `ring = 4`, and `compat.bundle = "2026.07.0"`.
+- This repository is an IBKR operations utility (deployment/watchdog/tooling) and is intentionally not converted to a standard runtime `pyproject` package flow in this phase.
+- No runtime business dependency contract changes are included in this PR; only metadata-only compatibility scaffolding is added.
+
+
 ## Community and security
 
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request scope, local verification, and documentation expectations.
