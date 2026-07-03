@@ -81,11 +81,13 @@ IGNORED_TITLE_KEYWORDS = (
 DISMISSIBLE_DIALOG_SEARCH_PATTERNS = [
     "Login Messages",
     "IBKR Gateway",
+    "Gateway",
 ]
 DISMISSIBLE_DIALOG_TITLE_KEYWORDS = (
     "login messages",
 )
 SMALL_GATEWAY_DIALOG_TITLE = "ibkr gateway"
+SMALL_CONNECTION_DIALOG_TITLE = "gateway"
 SMALL_GATEWAY_DIALOG_MAX_WIDTH = 650
 SMALL_GATEWAY_DIALOG_MAX_HEIGHT = 220
 # Current IBKR Gateway TOTP prompts place the code field in the upper half of
@@ -228,11 +230,21 @@ def is_small_gateway_dialog(title, width, height):
     return width <= SMALL_GATEWAY_DIALOG_MAX_WIDTH and height <= SMALL_GATEWAY_DIALOG_MAX_HEIGHT
 
 
+def is_small_connection_dialog(title, width, height):
+    if not DISMISS_SMALL_GATEWAY_DIALOGS:
+        return False
+    if title.lower() != SMALL_CONNECTION_DIALOG_TITLE:
+        return False
+    if not width or not height:
+        return False
+    return width <= SMALL_GATEWAY_DIALOG_MAX_WIDTH and height <= SMALL_GATEWAY_DIALOG_MAX_HEIGHT
+
+
 def is_dismissible_dialog_candidate(title, width=None, height=None):
     normalized_title = title.lower()
     if any(keyword in normalized_title for keyword in DISMISSIBLE_DIALOG_TITLE_KEYWORDS):
         return True
-    return is_small_gateway_dialog(title, width, height)
+    return is_small_gateway_dialog(title, width, height) or is_small_connection_dialog(title, width, height)
 
 
 def find_windows_by_patterns(patterns):

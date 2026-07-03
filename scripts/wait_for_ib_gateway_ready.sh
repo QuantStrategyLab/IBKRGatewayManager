@@ -6,7 +6,8 @@ gateway_mode="${1:-${IB_GATEWAY_MODE:-paper}}"
 ready_timeout_seconds="${IB_GATEWAY_READY_TIMEOUT_SECONDS:-240}"
 poll_interval_seconds="${IB_GATEWAY_READY_POLL_INTERVAL_SECONDS:-5}"
 handshake_timeout_seconds="${IB_GATEWAY_HANDSHAKE_TIMEOUT_SECONDS:-12}"
-healthcheck_client_id="${IB_GATEWAY_HEALTHCHECK_CLIENT_ID:-$((9000 + (BASHPID % 9000)))}"
+ready_stability_seconds="${IB_GATEWAY_READY_STABILITY_SECONDS:-35}"
+configured_healthcheck_client_id="${IB_GATEWAY_HEALTHCHECK_CLIENT_ID:-}"
 
 case "${gateway_mode}" in
   paper)
@@ -24,6 +25,8 @@ esac
 deadline=$((SECONDS + ready_timeout_seconds))
 
 check_api_handshake() {
+  local healthcheck_client_id="$1"
+
   timeout "${handshake_timeout_seconds}" docker exec -i "${container_name}" \
     env IB_GATEWAY_HEALTHCHECK_PORT="${gateway_port}" \
       IB_GATEWAY_HEALTHCHECK_CLIENT_ID="${healthcheck_client_id}" \
@@ -148,11 +151,44 @@ print(f"IB API handshake ready: server_version={server_version} client_id={clien
 PY
 }
 
-echo "Waiting for ${container_name} IB API handshake readiness on internal port ${gateway_port} (mode=${gateway_mode}, client_id=${healthcheck_client_id})"
+next_healthcheck_client_id() {
+  if [ -n "${configured_healthcheck_client_id}" ]; then
+    echo "${configured_healthcheck_client_id}"
+  else
+    echo $((9000 + ((BASHPID + SECONDS + RANDOM) % 9000)))
+  fi
+}
+
+confirm_stable_ready() {
+  local stability_seconds="$1"
+  local stable_deadline=$((SECONDS + stability_seconds))
+  local healthcheck_client_id
+
+  if [ "${stability_seconds}" -le 0 ]; then
+    return 0
+  fi
+
+  echo "IB gateway API handshake succeeded; confirming stability for ${stability_seconds}s"
+  while [ "${SECONDS}" -lt "${stable_deadline}" ]; do
+    sleep "${poll_interval_seconds}"
+    if ! docker inspect --format '{{.State.Running}}' "${container_name}" 2>/dev/null | grep -Fxq 'true'; then
+      echo "IB gateway container stopped during readiness stability window" >&2
+      return 1
+    fi
+    healthcheck_client_id="$(next_healthcheck_client_id)"
+    if ! check_api_handshake "${healthcheck_client_id}"; then
+      echo "IB gateway API readiness was not stable during confirmation window" >&2
+      return 1
+    fi
+  done
+}
+
+echo "Waiting for ${container_name} IB API handshake readiness on internal port ${gateway_port} (mode=${gateway_mode}, client_id=${configured_healthcheck_client_id:-auto})"
 
 while true; do
   if docker inspect --format '{{.State.Running}}' "${container_name}" 2>/dev/null | grep -Fxq 'true'; then
-    if check_api_handshake; then
+    healthcheck_client_id="$(next_healthcheck_client_id)"
+    if check_api_handshake "${healthcheck_client_id}" && confirm_stable_ready "${ready_stability_seconds}"; then
       echo "IB gateway API handshake is ready on internal port ${gateway_port} (mode=${gateway_mode})"
       exit 0
     fi
