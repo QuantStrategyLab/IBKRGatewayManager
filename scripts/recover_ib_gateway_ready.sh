@@ -53,6 +53,7 @@ set -eu
 progress_window_seconds="$1"
 progress_regex="$2"
 now="$(date +%s)"
+cutoff_timestamp="$(date -u -d "@$((now - progress_window_seconds))" "+%Y-%m-%d %H:%M:%S")"
 
 for log_path in /home/ibgateway/Jts/launcher.log /home/ibgateway/2fa.log; do
   if [ ! -f "${log_path}" ]; then
@@ -61,7 +62,11 @@ for log_path in /home/ibgateway/Jts/launcher.log /home/ibgateway/2fa.log; do
 
   log_mtime="$(stat -c %Y "${log_path}" 2>/dev/null || echo 0)"
   if [ $((now - log_mtime)) -le "${progress_window_seconds}" ]; then
-    tail -n 400 "${log_path}" 2>/dev/null | grep -Eiq "${progress_regex}" && exit 0
+    tail -n 400 "${log_path}" 2>/dev/null \
+      | awk -v cutoff_timestamp="${cutoff_timestamp}" -v progress_regex="${progress_regex}" '
+          substr($0, 1, 19) >= cutoff_timestamp && $0 ~ progress_regex { found = 1 }
+          END { exit found ? 0 : 1 }
+        ' && exit 0
   fi
 done
 
