@@ -611,6 +611,20 @@ jobs:
           fi
           compose_image="\${compose_project_name}-\${compose_service_name}:latest"
           resolve_ibkr_gateway_unit_names "\${container_name}" "\${IB_GATEWAY_UNIT_SUFFIX:-}"
+          watchers_restored=false
+          restore_gateway_watchers() {
+            set +e
+            restore_status=0
+            echo "[\$(date -u +%FT%TZ)] Restoring gateway watchers"
+            sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_2fa_bot_watcher.sh || restore_status="\$?"
+            sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_gateway_health_watcher.sh '${IB_GATEWAY_MODE}' || restore_status="\$?"
+            if [ "\${restore_status}" -eq 0 ]; then
+              watchers_restored=true
+            fi
+            set -e
+            return "\${restore_status}"
+          }
+          trap 'status=\$?; if [ "\${watchers_restored}" != "true" ]; then restore_gateway_watchers || true; fi; exit "\${status}"' EXIT
           sudo systemctl stop "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "\${IBKR_GATEWAY_HEALTHCHECK_SERVICE}" 2>/dev/null || true
           sudo systemctl stop "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" "\${IBKR_GATEWAY_DAILY_RESTART_SERVICE}" 2>/dev/null || true
           sudo bash ./scripts/ensure_host_swap.sh
@@ -620,7 +634,7 @@ jobs:
           fi
           sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_2fa_bot_watcher.sh
           sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
-          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_gateway_health_watcher.sh '${IB_GATEWAY_MODE}'
+          restore_gateway_watchers
           sudo docker compose ps
           sudo systemctl status "\${IBKR_2FA_BOT_TIMER}" --no-pager
           sudo systemctl status "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" --no-pager
@@ -640,6 +654,20 @@ jobs:
           container_name="\${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}"
           compose_service_name="\${IB_GATEWAY_COMPOSE_SERVICE_NAME:-ib-gateway}"
           resolve_ibkr_gateway_unit_names "\${container_name}" "\${IB_GATEWAY_UNIT_SUFFIX:-}"
+          watchers_restored=false
+          restore_gateway_watchers() {
+            set +e
+            restore_status=0
+            echo "[\$(date -u +%FT%TZ)] Restoring gateway watchers"
+            sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_2fa_bot_watcher.sh || restore_status="\$?"
+            sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_gateway_health_watcher.sh '${IB_GATEWAY_MODE}' || restore_status="\$?"
+            if [ "\${restore_status}" -eq 0 ]; then
+              watchers_restored=true
+            fi
+            set -e
+            return "\${restore_status}"
+          }
+          trap 'status=\$?; if [ "\${watchers_restored}" != "true" ]; then restore_gateway_watchers || true; fi; exit "\${status}"' EXIT
           sudo systemctl stop "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "\${IBKR_GATEWAY_HEALTHCHECK_SERVICE}" 2>/dev/null || true
           sudo systemctl stop "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" "\${IBKR_GATEWAY_DAILY_RESTART_SERVICE}" 2>/dev/null || true
           sudo bash ./scripts/ensure_host_swap.sh
@@ -649,7 +677,7 @@ jobs:
 
           sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_2fa_bot_watcher.sh
           sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
-          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_gateway_health_watcher.sh '${IB_GATEWAY_MODE}'
+          restore_gateway_watchers
           sudo docker compose ps
           sudo systemctl status "\${IBKR_2FA_BOT_TIMER}" --no-pager
           sudo systemctl status "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" --no-pager

@@ -74,6 +74,8 @@ grep -Fq 'sudo bash ./scripts/ensure_host_swap.sh' "$workflow_file"
 grep -Fq 'resolve_ibkr_gateway_unit_names "\${container_name}" "\${IB_GATEWAY_UNIT_SUFFIX:-}"' "$workflow_file"
 grep -Fq 'sudo systemctl stop "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "\${IBKR_GATEWAY_HEALTHCHECK_SERVICE}" 2>/dev/null || true' "$workflow_file"
 grep -Fq 'bash ./scripts/install_gateway_health_watcher.sh' "$workflow_file"
+grep -Fq 'restore_gateway_watchers()' "$workflow_file"
+grep -Fq "trap 'status=\\\$?; if [ \"\\\${watchers_restored}\" != \"true\" ]; then restore_gateway_watchers || true; fi; exit \"\\\${status}\"' EXIT" "$workflow_file"
 grep -Fq "sudo env IB_GATEWAY_CONTAINER_NAME=\"\\\${container_name}\" IB_GATEWAY_COMPOSE_SERVICE_NAME=\"\\\${compose_service_name}\" bash ./scripts/recover_ib_gateway_ready.sh '\${IB_GATEWAY_MODE}'" "$workflow_file"
 grep -Fq 'sudo systemctl status "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" --no-pager' "$workflow_file"
 grep -Fq 'sudo systemctl status "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" --no-pager' "$workflow_file"
@@ -88,11 +90,16 @@ health_watcher_lines=()
 while IFS= read -r line_number; do
   health_watcher_lines+=("$line_number")
 done < <(grep -nF 'bash ./scripts/install_gateway_health_watcher.sh' "$workflow_file" | cut -d: -f1)
+restore_call_lines=()
+while IFS= read -r line_number; do
+  restore_call_lines+=("$line_number")
+done < <(grep -nFx '          restore_gateway_watchers' "$workflow_file" | cut -d: -f1)
 test "${#recover_lines[@]}" -eq 2
 test "${#health_watcher_lines[@]}" -eq 2
+test "${#restore_call_lines[@]}" -eq 2
 for i in 0 1; do
-  if [ "${recover_lines[$i]}" -ge "${health_watcher_lines[$i]}" ]; then
-    echo "Gateway health watcher must be installed after explicit recovery in deploy block $i" >&2
+  if [ "${recover_lines[$i]}" -ge "${restore_call_lines[$i]}" ]; then
+    echo "Gateway watchers must be restored after explicit recovery in deploy block $i" >&2
     exit 1
   fi
 done
