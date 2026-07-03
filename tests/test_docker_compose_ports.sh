@@ -25,6 +25,11 @@ grep -Fq 'set_ibc_config_value "LoginDialogDisplayTimeout" "$timeout"' "$run_ove
 grep -Fq 'configure_ibc_second_factor_exit_interval' "$run_override"
 grep -Fq 'IBC_SECOND_FACTOR_AUTHENTICATION_EXIT_INTERVAL:-180' "$run_override"
 grep -Fq 'set_ibc_config_value "SecondFactorAuthenticationExitInterval" "$interval"' "$run_override"
+grep -Fq 'configure_ibc_api_ui_settings' "$run_override"
+grep -Fq 'IB_GATEWAY_SKIP_IBC_READ_ONLY_API_CONFIG:-yes' "$run_override"
+grep -Fq 'set_ibc_config_value "ReadOnlyApi" ""' "$run_override"
+grep -Fq 'IB_GATEWAY_SKIP_IBC_ACCEPT_INCOMING_CONFIG:-yes' "$run_override"
+grep -Fq 'set_ibc_config_value "AcceptIncomingConnectionAction" ""' "$run_override"
 grep -Fq 'configure_ib_gateway_vmoptions' "$run_override"
 grep -Fq 'find "${TWS_PATH}" -maxdepth 3 -name ibgateway.vmoptions' "$run_override"
 grep -Fq 'IB_GATEWAY_PARALLEL_GC_THREADS:-2' "$run_override"
@@ -37,6 +42,8 @@ grep -Fq '      - "${IB_GATEWAY_PAPER_HOST_PORT:-4002}:4004"' "$compose_file"
 grep -Fq '      - "${IB_GATEWAY_VNC_HOST_ADDRESS:-127.0.0.1}:${IB_GATEWAY_VNC_HOST_PORT:-5900}:5900"' "$compose_file"
 grep -Fq '      - TWS_ACCEPT_INCOMING=${TWS_ACCEPT_INCOMING:-accept}' "$compose_file"
 grep -Fq '      - READ_ONLY_API=${READ_ONLY_API:-no}' "$compose_file"
+grep -Fq '      - IB_GATEWAY_SKIP_IBC_READ_ONLY_API_CONFIG=${IB_GATEWAY_SKIP_IBC_READ_ONLY_API_CONFIG:-yes}' "$compose_file"
+grep -Fq '      - IB_GATEWAY_SKIP_IBC_ACCEPT_INCOMING_CONFIG=${IB_GATEWAY_SKIP_IBC_ACCEPT_INCOMING_CONFIG:-yes}' "$compose_file"
 grep -Fq '      - TWOFA_DEVICE=${TWOFA_DEVICE:-}' "$compose_file"
 grep -Fq '      - TWOFA_TIMEOUT_ACTION=${TWOFA_TIMEOUT_ACTION:-restart}' "$compose_file"
 grep -Fq '      - RELOGIN_AFTER_TWOFA_TIMEOUT=${RELOGIN_AFTER_TWOFA_TIMEOUT:-yes}' "$compose_file"
@@ -54,6 +61,8 @@ grep -Fq 'MIN_TOTP_SECONDS_REMAINING = 15' "$repo_dir/2fa_bot.py"
 grep -Fq 'SMALL_GATEWAY_DIALOG_MAX_WIDTH = 650' "$repo_dir/2fa_bot.py"
 grep -Fq 'SMALL_GATEWAY_DIALOG_MAX_HEIGHT = 220' "$repo_dir/2fa_bot.py"
 grep -Fq 'def is_small_gateway_dialog(title, width, height):' "$repo_dir/2fa_bot.py"
+grep -Fq 'SMALL_CONNECTION_DIALOG_TITLE = "gateway"' "$repo_dir/2fa_bot.py"
+grep -Fq 'def is_small_connection_dialog(title, width, height):' "$repo_dir/2fa_bot.py"
 grep -Fq 'is_dismissible_dialog_candidate(title, width, height)' "$repo_dir/2fa_bot.py"
 grep -Fq 'def type_totp_into_active_window(code):' "$repo_dir/2fa_bot.py"
 
@@ -71,6 +80,8 @@ spec.loader.exec_module(module)
 
 assert module.is_dismissible_dialog_candidate("Login Messages")
 assert module.is_dismissible_dialog_candidate("IBKR Gateway", 509, 131)
+assert module.is_dismissible_dialog_candidate("Gateway", 510, 131)
 assert not module.is_dismissible_dialog_candidate("IBKR Gateway", 700, 550)
 assert not module.is_dismissible_dialog_candidate("IBKR Gateway", 790, 610)
+assert not module.is_dismissible_dialog_candidate("Gateway", 790, 610)
 PY

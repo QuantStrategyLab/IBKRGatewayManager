@@ -11,6 +11,8 @@ services:
       - TRADING_MODE=${TRADING_MODE:-paper}
       - TWS_ACCEPT_INCOMING=${TWS_ACCEPT_INCOMING:-accept}
       - READ_ONLY_API=${READ_ONLY_API:-no}
+      - IB_GATEWAY_SKIP_IBC_READ_ONLY_API_CONFIG=${IB_GATEWAY_SKIP_IBC_READ_ONLY_API_CONFIG:-yes}
+      - IB_GATEWAY_SKIP_IBC_ACCEPT_INCOMING_CONFIG=${IB_GATEWAY_SKIP_IBC_ACCEPT_INCOMING_CONFIG:-yes}
       # Keep IBC aligned with the upstream image defaults so paper/live
       # sessions recover after missed 2FA or stale-session prompts.
       - TWOFA_DEVICE=${TWOFA_DEVICE:-}

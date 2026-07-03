@@ -65,6 +65,7 @@ start_vnc() {
 start_IBC() {
 	configure_ibc_login_dialog_timeout
 	configure_ibc_second_factor_exit_interval
+	configure_ibc_api_ui_settings
 	echo ".> Starting IBC in ${TRADING_MODE} mode, with params:"
 	echo ".>		Version: ${TWS_MAJOR_VRSN}"
 	echo ".>		program: ${IBC_COMMAND:-gateway}"
@@ -114,6 +115,20 @@ configure_ibc_login_dialog_timeout() {
 configure_ibc_second_factor_exit_interval() {
 	local interval="${IBC_SECOND_FACTOR_AUTHENTICATION_EXIT_INTERVAL:-180}"
 	set_ibc_config_value "SecondFactorAuthenticationExitInterval" "$interval"
+}
+
+configure_ibc_api_ui_settings() {
+	local read_only_api="${READ_ONLY_API:-}"
+	local accept_incoming="${TWS_ACCEPT_INCOMING:-}"
+
+	if [ "${IB_GATEWAY_SKIP_IBC_READ_ONLY_API_CONFIG:-yes}" = "yes" ] && [ "${read_only_api,,}" = "no" ]; then
+		set_ibc_config_value "ReadOnlyApi" ""
+		echo ".> Leaving existing IB Gateway ReadOnlyApi setting unchanged"
+	fi
+	if [ "${IB_GATEWAY_SKIP_IBC_ACCEPT_INCOMING_CONFIG:-yes}" = "yes" ] && [ "${accept_incoming,,}" = "accept" ]; then
+		set_ibc_config_value "AcceptIncomingConnectionAction" ""
+		echo ".> Leaving existing IB Gateway AcceptIncomingConnectionAction setting unchanged"
+	fi
 }
 
 configure_ib_gateway_vmoptions() {
