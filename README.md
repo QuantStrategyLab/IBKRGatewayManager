@@ -1,5 +1,14 @@
 # IBKRGatewayManager
 
+
+## QSL architecture role
+
+- **Layer**: `runtime-ops`.
+- **Responsibility**: IBKR gateway VM lifecycle and 2FA operations utility.
+- **Owns**: gateway deployment, remote sync, Docker rollout, watcher setup.
+- **Consumes**: InteractiveBrokersPlatform operational requirements.
+- **Must not**: decide strategy eligibility or submit trading orders.
+
 [Chinese README](README.zh-CN.md)
 
 > Investing involves risk. This project does not provide investment advice and is for education, research, and engineering review only.
