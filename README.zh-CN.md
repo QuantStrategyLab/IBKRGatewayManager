@@ -1,5 +1,14 @@
 # IBKRGatewayManager
 
+
+## QSL 架构角色
+
+- **层级**：`运行时运维`。
+- **职责**：IBKR gateway VM 生命周期与 2FA 运维工具。
+- **事实源/归属**：gateway 部署、remote sync、Docker rollout、watcher setup。
+- **消费对象**：InteractiveBrokersPlatform 的运维需求。
+- **禁止事项**：决定策略 eligibility 或提交交易订单。
+
 [English README](README.md)
 
 > 投资有风险。本项目不构成投资建议，仅用于学习、研究和工程审阅。
