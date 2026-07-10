@@ -120,14 +120,24 @@ configure_ibc_second_factor_exit_interval() {
 configure_ibc_api_ui_settings() {
 	local read_only_api="${READ_ONLY_API:-}"
 	local accept_incoming="${TWS_ACCEPT_INCOMING:-}"
+	local normalized_read_only_api
+	local normalized_accept_incoming
+	normalized_read_only_api="$(printf '%s' "$read_only_api" | tr '[:upper:]' '[:lower:]')"
+	normalized_accept_incoming="$(printf '%s' "$accept_incoming" | tr '[:upper:]' '[:lower:]')"
 
-	if [ "${IB_GATEWAY_SKIP_IBC_READ_ONLY_API_CONFIG:-yes}" = "yes" ] && [ "${read_only_api,,}" = "no" ]; then
-		set_ibc_config_value "ReadOnlyApi" ""
-		echo ".> Leaving existing IB Gateway ReadOnlyApi setting unchanged"
+	if [ "$normalized_read_only_api" = "no" ]; then
+		set_ibc_config_value "ReadOnlyApi" "$normalized_read_only_api"
+		echo ".> Setting IB Gateway ReadOnlyApi=${normalized_read_only_api}"
+	elif [ "${IB_GATEWAY_SKIP_IBC_READ_ONLY_API_CONFIG:-yes}" != "yes" ] && [ -n "$normalized_read_only_api" ]; then
+		set_ibc_config_value "ReadOnlyApi" "$normalized_read_only_api"
+		echo ".> Setting IB Gateway ReadOnlyApi=${normalized_read_only_api}"
 	fi
-	if [ "${IB_GATEWAY_SKIP_IBC_ACCEPT_INCOMING_CONFIG:-yes}" = "yes" ] && [ "${accept_incoming,,}" = "accept" ]; then
-		set_ibc_config_value "AcceptIncomingConnectionAction" ""
-		echo ".> Leaving existing IB Gateway AcceptIncomingConnectionAction setting unchanged"
+	if [ "$normalized_accept_incoming" = "accept" ]; then
+		set_ibc_config_value "AcceptIncomingConnectionAction" "$normalized_accept_incoming"
+		echo ".> Setting IB Gateway AcceptIncomingConnectionAction=${normalized_accept_incoming}"
+	elif [ "${IB_GATEWAY_SKIP_IBC_ACCEPT_INCOMING_CONFIG:-yes}" != "yes" ] && [ -n "$normalized_accept_incoming" ]; then
+		set_ibc_config_value "AcceptIncomingConnectionAction" "$normalized_accept_incoming"
+		echo ".> Setting IB Gateway AcceptIncomingConnectionAction=${normalized_accept_incoming}"
 	fi
 }
 
