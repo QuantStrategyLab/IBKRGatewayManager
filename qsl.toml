@@ -1,7 +1,7 @@
 [qsl]
 repo = "IBKRGatewayManager"
-tier = "runtime-ops"
-ring = 4
+tier = "ops/tooling"
+upgrade_ring = "ring_e"
 allow_legacy = true
 
 [qsl.compat]
