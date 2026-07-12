@@ -82,14 +82,6 @@ jobs:
       contents: read
       id-token: write
     env:
-      TARGET_NAME: ${{ matrix.target.name }}
-      GCP_PROJECT_ID: ${{ matrix.target.gcp_project_id }}
-      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ matrix.target.gcp_workload_identity_provider }}
-      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ matrix.target.gcp_workload_identity_service_account }}
-      GCE_USER: ${{ matrix.target.gce_user }}
-      GCE_INSTANCE_NAME: ${{ matrix.target.gce_instance_name }}
-      GCE_ZONE: ${{ matrix.target.gce_zone }}
-      SSH_PRIVATE_KEY_SECRET_NAME: ${{ matrix.target.ssh_private_key_secret_name }}
       SCREEN_ACTION: ${{ github.event.inputs.screen_action }}
       WAIT_FOR_SECOND_FACTOR: ${{ github.event.inputs.wait_for_second_factor }}
     steps:
@@ -97,30 +89,36 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            for (const value of [
-              ${{ toJSON(matrix.target.name) }},
-              ${{ toJSON(matrix.target.gcp_project_id) }},
-              ${{ toJSON(matrix.target.gcp_workload_identity_provider) }},
-              ${{ toJSON(matrix.target.gcp_workload_identity_service_account) }},
-              ${{ toJSON(matrix.target.gce_user) }},
-              ${{ toJSON(matrix.target.gce_instance_name) }},
-              ${{ toJSON(matrix.target.gce_zone) }},
-              ${{ toJSON(matrix.target.deploy_path) }},
-              ${{ toJSON(matrix.target.ssh_private_key_secret_name) }}
-            ]) {
+            const metadata = {
+              TARGET_NAME: ${{ toJSON(matrix.target.name) }},
+              GCP_PROJECT_ID: ${{ toJSON(matrix.target.gcp_project_id) }},
+              GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ toJSON(matrix.target.gcp_workload_identity_provider) }},
+              GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ toJSON(matrix.target.gcp_workload_identity_service_account) }},
+              GCE_USER: ${{ toJSON(matrix.target.gce_user) }},
+              GCE_INSTANCE_NAME: ${{ toJSON(matrix.target.gce_instance_name) }},
+              GCE_ZONE: ${{ toJSON(matrix.target.gce_zone) }},
+              DEPLOY_PATH: ${{ toJSON(matrix.target.deploy_path) }},
+              SSH_PRIVATE_KEY_SECRET_NAME: ${{ toJSON(matrix.target.ssh_private_key_secret_name) }},
+              IB_GATEWAY_MODE: ${{ toJSON(matrix.target.mode) }},
+              IB_GATEWAY_CONTAINER_NAME: ${{ toJSON(matrix.target.container_name) }},
+              IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ toJSON(matrix.target.compose_service_name) }},
+              IB_GATEWAY_UNIT_SUFFIX: ${{ toJSON(matrix.target.unit_suffix || '') }}
+            };
+            for (const [name, value] of Object.entries(metadata)) {
               if (value) core.setSecret(String(value));
+              core.exportVariable(name, value || "");
             }
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ matrix.target.gcp_workload_identity_provider }}
+          service_account: ${{ matrix.target.gcp_workload_identity_service_account }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
+          project_id: ${{ matrix.target.gcp_project_id }}
           version: '>= 416.0.0'
 
       - name: Prepare SSH key
