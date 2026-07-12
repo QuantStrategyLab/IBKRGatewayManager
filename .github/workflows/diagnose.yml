@@ -57,12 +57,17 @@ jobs:
               return digits.length >= 4 ? `U***${digits.slice(-4)}` : "<target>";
             };
             core.info(`Targets: ${selected.map(({target}) => maskedTarget(target.name)).join(", ")}`);
-            core.setOutput("matrix", JSON.stringify({target_index: selected.map(({targetIndex}) => targetIndex)}));
+            const crypto = require("crypto");
+            const matrixTargets = selected.map(({target, targetIndex}) => ({
+              target_index: targetIndex,
+              target_digest: crypto.createHash("sha256").update(JSON.stringify(target)).digest("hex")
+            }));
+            core.setOutput("matrix", JSON.stringify({include: matrixTargets}));
 
   diagnose:
     name: Diagnose gateway target
     needs: resolve
-    if: needs.resolve.outputs.matrix != '{"target_index":[]}'
+    if: needs.resolve.outputs.matrix != '{"include":[]}'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     strategy:
@@ -90,6 +95,12 @@ jobs:
             const target = targets[Number(${{ toJSON(matrix.target_index) }})];
             if (!target) {
               core.setFailed("Resolved gateway target is unavailable");
+              return;
+            }
+            const crypto = require("crypto");
+            const targetDigest = crypto.createHash("sha256").update(JSON.stringify(target)).digest("hex");
+            if (targetDigest !== ${{ toJSON(matrix.target_digest) }}) {
+              core.setFailed("Resolved gateway target changed between jobs");
               return;
             }
 
@@ -173,6 +184,7 @@ jobs:
           REMOTE_DIAG_COMMAND=$(cat <<'EOF'
           set -euo pipefail
           cd __DEPLOY_PATH__
+          CONTAINER_NAME=__CONTAINER_NAME__
 
           section() {
             printf '\n===== %s =====\n' "$1"
@@ -187,8 +199,8 @@ jobs:
 
           section "clock"
           date -u || true
-          sudo docker exec ib-gateway bash -lc 'date -u || true' || true
-          sudo docker exec ib-gateway bash -lc 'python3 - <<'"'"'PY'"'"'
+          sudo docker exec "$CONTAINER_NAME" bash -lc 'date -u || true' || true
+          sudo docker exec "$CONTAINER_NAME" bash -lc 'python3 - <<'"'"'PY'"'"'
           import os
           import time
 
@@ -201,16 +213,16 @@ jobs:
 
           section "runtime executable metadata"
           printf 'host_arch=%s\n' "$(uname -m)"
-          if sudo docker inspect ib-gateway >/dev/null 2>&1; then
+          if sudo docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
             sudo docker inspect --format \
               'container_state={{.State.Status}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} restart_count={{.RestartCount}}' \
-              ib-gateway || true
-            image_id="$(sudo docker inspect --format '{{.Image}}' ib-gateway 2>/dev/null || true)"
+              "$CONTAINER_NAME" || true
+            image_id="$(sudo docker inspect --format '{{.Image}}' "$CONTAINER_NAME" 2>/dev/null || true)"
             if [ -n "$image_id" ]; then
               sudo docker image inspect --format 'image_os={{.Os}} image_arch={{.Architecture}}' "$image_id" || true
             fi
             runtime_metadata_dir="$(mktemp -d)"
-            if sudo docker cp ib-gateway:/home/ibgateway/scripts/run.sh "$runtime_metadata_dir/run.sh" >/dev/null 2>&1; then
+            if sudo docker cp "$CONTAINER_NAME":/home/ibgateway/scripts/run.sh "$runtime_metadata_dir/run.sh" >/dev/null 2>&1; then
               printf 'run_file_type=%s\n' "$(file -b "$runtime_metadata_dir/run.sh")"
               stat -c 'run_mode=%a run_size=%s' "$runtime_metadata_dir/run.sh" || true
               printf 'run_first_bytes='
@@ -220,7 +232,7 @@ jobs:
             else
               echo "run_file_unavailable"
             fi
-            if sudo docker cp ib-gateway:/bin/bash "$runtime_metadata_dir/bash" >/dev/null 2>&1; then
+            if sudo docker cp "$CONTAINER_NAME":/bin/bash "$runtime_metadata_dir/bash" >/dev/null 2>&1; then
               printf 'bash_file_type=%s\n' "$(file -b "$runtime_metadata_dir/bash")"
             else
               echo "bash_file_unavailable"
@@ -243,13 +255,13 @@ jobs:
           sudo journalctl -u ibkr-2fa-bot.service -n 100 --no-pager || true
 
           section "container processes"
-          sudo docker exec ib-gateway bash -lc 'pgrep -a -f "2fa_bot.py|ibgateway|socat|Xvfb|x11vnc|ibcstart" || true' || true
+          sudo docker exec "$CONTAINER_NAME" bash -lc 'pgrep -a -f "2fa_bot.py|ibgateway|socat|Xvfb|x11vnc|ibcstart" || true' || true
 
           section "container listening ports"
-          sudo docker exec ib-gateway bash -lc 'ss -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || netstat -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || true' || true
+          sudo docker exec "$CONTAINER_NAME" bash -lc 'ss -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || netstat -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || true' || true
 
           section "x11 windows"
-          sudo docker exec ib-gateway bash -lc '
+          sudo docker exec "$CONTAINER_NAME" bash -lc '
             export DISPLAY=:1
             ids=$(xdotool search --name ".*" 2>/dev/null || true)
             if [ -z "$ids" ]; then
@@ -270,14 +282,16 @@ jobs:
           ' || true
 
           section "2fa bot log"
-          sudo docker exec ib-gateway bash -lc 'tail -n 160 /home/ibgateway/2fa.log 2>/dev/null || echo "2fa.log missing"' || true
+          sudo docker exec "$CONTAINER_NAME" bash -lc 'tail -n 160 /home/ibgateway/2fa.log 2>/dev/null || echo "2fa.log missing"' || true
 
           section "ib gateway docker log"
-          sudo docker logs --tail 220 ib-gateway 2>&1 || true
+          sudo docker logs --tail 220 "$CONTAINER_NAME" 2>&1 || true
           EOF
           )
           deploy_path_quoted="$(printf '%q' "${DEPLOY_PATH}")"
+          container_name_quoted="$(printf '%q' "${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}")"
           REMOTE_DIAG_COMMAND="${REMOTE_DIAG_COMMAND/__DEPLOY_PATH__/${deploy_path_quoted}}"
+          REMOTE_DIAG_COMMAND="${REMOTE_DIAG_COMMAND/__CONTAINER_NAME__/${container_name_quoted}}"
 
           redact_diagnostics() {
             python3 -c "$(cat <<'PY'

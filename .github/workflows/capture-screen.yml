@@ -68,12 +68,17 @@ jobs:
               return digits.length >= 4 ? `U***${digits.slice(-4)}` : "<target>";
             };
             core.info(`Targets: ${selected.map(({target}) => maskedTarget(target.name)).join(", ")}`);
-            core.setOutput("matrix", JSON.stringify({target_index: selected.map(({targetIndex}) => targetIndex)}));
+            const crypto = require("crypto");
+            const matrixTargets = selected.map(({target, targetIndex}) => ({
+              target_index: targetIndex,
+              target_digest: crypto.createHash("sha256").update(JSON.stringify(target)).digest("hex")
+            }));
+            core.setOutput("matrix", JSON.stringify({include: matrixTargets}));
 
   capture:
     name: Capture gateway screen
     needs: resolve
-    if: needs.resolve.outputs.matrix != '{"target_index":[]}'
+    if: needs.resolve.outputs.matrix != '{"include":[]}'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     strategy:
@@ -104,6 +109,12 @@ jobs:
             const target = targets[Number(${{ toJSON(matrix.target_index) }})];
             if (!target) {
               core.setFailed("Resolved gateway target is unavailable");
+              return;
+            }
+            const crypto = require("crypto");
+            const targetDigest = crypto.createHash("sha256").update(JSON.stringify(target)).digest("hex");
+            if (targetDigest !== ${{ toJSON(matrix.target_digest) }}) {
+              core.setFailed("Resolved gateway target changed between jobs");
               return;
             }
 
