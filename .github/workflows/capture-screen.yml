@@ -55,9 +55,9 @@ jobs:
             }
 
             const selectedName = ${{ toJSON(github.event.inputs.target || 'all') }};
-            const selected = selectedName === "all"
-              ? targets
-              : targets.filter((target) => target.name === selectedName);
+            const selected = targets
+              .map((target, targetIndex) => ({target, targetIndex}))
+              .filter(({target}) => selectedName === "all" || target.name === selectedName);
             if (!selected.length) {
               core.setFailed("Unknown gateway target; choose one of the configured targets");
               return;
@@ -67,13 +67,18 @@ jobs:
               const digits = String(name).replace(/\D/g, "");
               return digits.length >= 4 ? `U***${digits.slice(-4)}` : "<target>";
             };
-            core.info(`Targets: ${selected.map((target) => maskedTarget(target.name)).join(", ")}`);
-            core.setOutput("matrix", JSON.stringify({target: selected}));
+            core.info(`Targets: ${selected.map(({target}) => maskedTarget(target.name)).join(", ")}`);
+            const crypto = require("crypto");
+            const matrixTargets = selected.map(({target, targetIndex}) => ({
+              target_index: targetIndex,
+              target_digest: crypto.createHash("sha256").update(JSON.stringify(target)).digest("hex")
+            }));
+            core.setOutput("matrix", JSON.stringify({include: matrixTargets}));
 
   capture:
     name: Capture gateway screen
     needs: resolve
-    if: needs.resolve.outputs.matrix != '{"target":[]}'
+    if: needs.resolve.outputs.matrix != '{"include":[]}'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     strategy:
@@ -87,39 +92,81 @@ jobs:
       WAIT_FOR_SECOND_FACTOR: ${{ github.event.inputs.wait_for_second_factor }}
     steps:
       - name: Mask target metadata
+        id: metadata
         uses: actions/github-script@v8
         with:
           script: |
+            const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};
+            if (!raw || !raw.trim()) {
+              core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
+              return;
+            }
+
+            const loaded = JSON.parse(raw);
+            const targets = Array.isArray(loaded)
+              ? loaded
+              : Object.entries(loaded).map(([name, config]) => ({...config, name}));
+            const target = targets[Number(${{ toJSON(matrix.target_index) }})];
+            if (!target) {
+              core.setFailed("Resolved gateway target is unavailable");
+              return;
+            }
+            const crypto = require("crypto");
+            const targetDigest = crypto.createHash("sha256").update(JSON.stringify(target)).digest("hex");
+            if (targetDigest !== ${{ toJSON(matrix.target_digest) }}) {
+              core.setFailed("Resolved gateway target changed between jobs");
+              return;
+            }
+
             const metadata = {
-              TARGET_NAME: ${{ toJSON(matrix.target.name) }},
-              GCP_PROJECT_ID: ${{ toJSON(matrix.target.gcp_project_id) }},
-              GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ toJSON(matrix.target.gcp_workload_identity_provider) }},
-              GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ toJSON(matrix.target.gcp_workload_identity_service_account) }},
-              GCE_USER: ${{ toJSON(matrix.target.gce_user) }},
-              GCE_INSTANCE_NAME: ${{ toJSON(matrix.target.gce_instance_name) }},
-              GCE_ZONE: ${{ toJSON(matrix.target.gce_zone) }},
-              DEPLOY_PATH: ${{ toJSON(matrix.target.deploy_path) }},
-              SSH_PRIVATE_KEY_SECRET_NAME: ${{ toJSON(matrix.target.ssh_private_key_secret_name) }},
-              IB_GATEWAY_MODE: ${{ toJSON(matrix.target.mode) }},
-              IB_GATEWAY_CONTAINER_NAME: ${{ toJSON(matrix.target.container_name) }},
-              IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ toJSON(matrix.target.compose_service_name) }},
-              IB_GATEWAY_UNIT_SUFFIX: ${{ toJSON(matrix.target.unit_suffix || '') }}
+              TARGET_NAME: target.name,
+              GCP_PROJECT_ID: target.gcp_project_id,
+              GCP_WORKLOAD_IDENTITY_PROVIDER: target.gcp_workload_identity_provider,
+              GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: target.gcp_workload_identity_service_account,
+              GCE_USER: target.gce_user,
+              GCE_INSTANCE_NAME: target.gce_instance_name,
+              GCE_ZONE: target.gce_zone,
+              DEPLOY_PATH: target.deploy_path,
+              SSH_PRIVATE_KEY_SECRET_NAME: target.ssh_private_key_secret_name,
+              IB_GATEWAY_MODE: target.mode,
+              IB_GATEWAY_CONTAINER_NAME: target.container_name,
+              IB_GATEWAY_COMPOSE_SERVICE_NAME: target.compose_service_name,
+              IB_GATEWAY_UNIT_SUFFIX: target.unit_suffix || ""
             };
+            const authenticationOutputs = new Set([
+              "GCP_PROJECT_ID",
+              "GCP_WORKLOAD_IDENTITY_PROVIDER",
+              "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"
+            ]);
             for (const [name, value] of Object.entries(metadata)) {
-              if (value) core.setSecret(String(value));
+              if (value && !authenticationOutputs.has(name)) core.setSecret(String(value));
               core.exportVariable(name, value || "");
+              if (authenticationOutputs.has(name)) core.setOutput(name.toLowerCase(), value || "");
+            }
+
+      - name: Mask authentication metadata
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const values = [
+              ${{ toJSON(steps.metadata.outputs.gcp_project_id) }},
+              ${{ toJSON(steps.metadata.outputs.gcp_workload_identity_provider) }},
+              ${{ toJSON(steps.metadata.outputs.gcp_workload_identity_service_account) }}
+            ];
+            for (const value of values) {
+              if (value) core.setSecret(String(value));
             }
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ matrix.target.gcp_workload_identity_provider }}
-          service_account: ${{ matrix.target.gcp_workload_identity_service_account }}
+          workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}
+          service_account: ${{ steps.metadata.outputs.gcp_workload_identity_service_account }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: ${{ matrix.target.gcp_project_id }}
+          project_id: ${{ steps.metadata.outputs.gcp_project_id }}
           version: '>= 416.0.0'
 
       - name: Prepare SSH key
