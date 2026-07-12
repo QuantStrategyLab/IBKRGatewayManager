@@ -157,7 +157,6 @@ grep -Fq 'sudo docker compose down' "$maintenance_workflow_file"
 grep -Fq 'sudo docker compose up -d --no-build "${compose_service_name}"' "$maintenance_workflow_file"
 grep -Fq 'bash ./scripts/install_gateway_health_watcher.sh __IB_GATEWAY_MODE__' "$maintenance_workflow_file"
 
-grep -Fq 'shell: python3 {0}' "$diagnose_workflow_file"
 ! grep -Fxq '        shell: python3' "$diagnose_workflow_file"
 grep -Fq 'redact_diagnostics()' "$diagnose_workflow_file"
 grep -Fq 'sensitive_assignment_pattern.sub(r"\1\2<REDACTED>\n", line)' "$diagnose_workflow_file"
@@ -216,6 +215,9 @@ for resolver_workflow in "$repo_dir/.github/workflows/diagnose.yml" \
   "$repo_dir/.github/workflows/capture-screen.yml" \
   "$repo_dir/.github/workflows/remote-maintenance.yml"
 do
-  grep -Fq 'return f"U***{digits[-4:]}" if len(digits) >= 4 else "<target>"' "$resolver_workflow"
+  grep -Fq 'const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};' "$resolver_workflow"
+  grep -Fq 'return digits.length >= 4 ? `U***${digits.slice(-4)}` : "<target>";' "$resolver_workflow"
+  grep -Fq 'if (value) core.setSecret(String(value));' "$resolver_workflow"
+  ! grep -Fq 'TARGETS_JSON: ${{ vars.IB_GATEWAY_TARGETS_JSON }}' "$resolver_workflow"
   ! grep -Fq 'print("Targets: " + ", ".join(t["name"] for t in selected))' "$resolver_workflow"
 done
