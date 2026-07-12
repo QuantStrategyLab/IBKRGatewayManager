@@ -231,6 +231,25 @@ jobs:
 
           section "runtime executable metadata"
           printf 'host_arch=%s\n' "$(uname -m)"
+          if [ -f container_overrides/run.sh ]; then
+            stat -c 'source_run_mode=%a source_run_size=%s' container_overrides/run.sh 2>/dev/null \
+              || echo "source_run_stat_unavailable"
+            if command -v od >/dev/null 2>&1; then
+              printf 'source_run_first_bytes='
+              od -An -tx1 -N16 container_overrides/run.sh 2>/dev/null | tr -d ' \n' || true
+              printf '\n'
+            else
+              echo "source_run_first_bytes_unavailable"
+            fi
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum container_overrides/run.sh 2>/dev/null \
+                | awk '{print "source_run_sha256=" $1}' || true
+            else
+              echo "source_run_sha256_unavailable"
+            fi
+          else
+            echo "source_run_file_unavailable"
+          fi
           if sudo docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
             sudo docker inspect --format \
               'container_state={{.State.Status}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} restart_count={{.RestartCount}}' \
