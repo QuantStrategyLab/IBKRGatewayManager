@@ -44,9 +44,9 @@ jobs:
             }
 
             const selectedName = ${{ toJSON(github.event.inputs.target || 'all') }};
-            const selected = selectedName === "all"
-              ? targets
-              : targets.filter((target) => target.name === selectedName);
+            const selected = targets
+              .map((target, targetIndex) => ({target, targetIndex}))
+              .filter(({target}) => selectedName === "all" || target.name === selectedName);
             if (!selected.length) {
               core.setFailed("Unknown gateway target; choose one of the configured targets");
               return;
@@ -56,13 +56,13 @@ jobs:
               const digits = String(name).replace(/\D/g, "");
               return digits.length >= 4 ? `U***${digits.slice(-4)}` : "<target>";
             };
-            core.info(`Targets: ${selected.map((target) => maskedTarget(target.name)).join(", ")}`);
-            core.setOutput("matrix", JSON.stringify({target: selected}));
+            core.info(`Targets: ${selected.map(({target}) => maskedTarget(target.name)).join(", ")}`);
+            core.setOutput("matrix", JSON.stringify({target_index: selected.map(({targetIndex}) => targetIndex)}));
 
   diagnose:
     name: Diagnose gateway target
     needs: resolve
-    if: needs.resolve.outputs.matrix != '{"target":[]}'
+    if: needs.resolve.outputs.matrix != '{"target_index":[]}'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     strategy:
@@ -73,40 +73,58 @@ jobs:
       id-token: write
     steps:
       - name: Mask target metadata
+        id: metadata
         uses: actions/github-script@v8
         with:
           script: |
+            const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};
+            if (!raw || !raw.trim()) {
+              core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
+              return;
+            }
+
+            const loaded = JSON.parse(raw);
+            const targets = Array.isArray(loaded)
+              ? loaded
+              : Object.entries(loaded).map(([name, config]) => ({...config, name}));
+            const target = targets[Number(${{ toJSON(matrix.target_index) }})];
+            if (!target) {
+              core.setFailed("Resolved gateway target is unavailable");
+              return;
+            }
+
             const metadata = {
-              TARGET_NAME: ${{ toJSON(matrix.target.name) }},
-              GCP_PROJECT_ID: ${{ toJSON(matrix.target.gcp_project_id) }},
-              GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ toJSON(matrix.target.gcp_workload_identity_provider) }},
-              GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ toJSON(matrix.target.gcp_workload_identity_service_account) }},
-              GCE_USER: ${{ toJSON(matrix.target.gce_user) }},
-              GCE_INSTANCE_NAME: ${{ toJSON(matrix.target.gce_instance_name) }},
-              GCE_ZONE: ${{ toJSON(matrix.target.gce_zone) }},
-              DEPLOY_PATH: ${{ toJSON(matrix.target.deploy_path) }},
-              SSH_PRIVATE_KEY_SECRET_NAME: ${{ toJSON(matrix.target.ssh_private_key_secret_name) }},
-              IB_GATEWAY_MODE: ${{ toJSON(matrix.target.mode) }},
-              IB_GATEWAY_CONTAINER_NAME: ${{ toJSON(matrix.target.container_name) }},
-              IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ toJSON(matrix.target.compose_service_name) }},
-              IB_GATEWAY_UNIT_SUFFIX: ${{ toJSON(matrix.target.unit_suffix || '') }}
+              TARGET_NAME: target.name,
+              GCP_PROJECT_ID: target.gcp_project_id,
+              GCP_WORKLOAD_IDENTITY_PROVIDER: target.gcp_workload_identity_provider,
+              GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: target.gcp_workload_identity_service_account,
+              GCE_USER: target.gce_user,
+              GCE_INSTANCE_NAME: target.gce_instance_name,
+              GCE_ZONE: target.gce_zone,
+              DEPLOY_PATH: target.deploy_path,
+              SSH_PRIVATE_KEY_SECRET_NAME: target.ssh_private_key_secret_name,
+              IB_GATEWAY_MODE: target.mode,
+              IB_GATEWAY_CONTAINER_NAME: target.container_name,
+              IB_GATEWAY_COMPOSE_SERVICE_NAME: target.compose_service_name,
+              IB_GATEWAY_UNIT_SUFFIX: target.unit_suffix || ""
             };
             for (const [name, value] of Object.entries(metadata)) {
               if (value) core.setSecret(String(value));
               core.exportVariable(name, value || "");
+              core.setOutput(name.toLowerCase(), value || "");
             }
 
       - name: Authenticate to Google Cloud
         id: auth
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ matrix.target.gcp_workload_identity_provider }}
-          service_account: ${{ matrix.target.gcp_workload_identity_service_account }}
+          workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}
+          service_account: ${{ steps.metadata.outputs.gcp_workload_identity_service_account }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: ${{ matrix.target.gcp_project_id }}
+          project_id: ${{ steps.metadata.outputs.gcp_project_id }}
           version: '>= 416.0.0'
 
       - name: Prepare SSH key
@@ -180,6 +198,37 @@ jobs:
           else:
               print("totp_secret_present", False)
           PY' || true
+
+          section "runtime executable metadata"
+          printf 'host_arch=%s\n' "$(uname -m)"
+          if sudo docker inspect ib-gateway >/dev/null 2>&1; then
+            sudo docker inspect --format \
+              'container_state={{.State.Status}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} restart_count={{.RestartCount}}' \
+              ib-gateway || true
+            image_id="$(sudo docker inspect --format '{{.Image}}' ib-gateway 2>/dev/null || true)"
+            if [ -n "$image_id" ]; then
+              sudo docker image inspect --format 'image_os={{.Os}} image_arch={{.Architecture}}' "$image_id" || true
+            fi
+            runtime_metadata_dir="$(mktemp -d)"
+            if sudo docker cp ib-gateway:/home/ibgateway/scripts/run.sh "$runtime_metadata_dir/run.sh" >/dev/null 2>&1; then
+              printf 'run_file_type=%s\n' "$(file -b "$runtime_metadata_dir/run.sh")"
+              stat -c 'run_mode=%a run_size=%s' "$runtime_metadata_dir/run.sh" || true
+              printf 'run_first_bytes='
+              od -An -tx1 -N16 "$runtime_metadata_dir/run.sh" | tr -d ' \n'
+              printf '\n'
+              sha256sum "$runtime_metadata_dir/run.sh" | awk '{print "run_sha256=" $1}'
+            else
+              echo "run_file_unavailable"
+            fi
+            if sudo docker cp ib-gateway:/bin/bash "$runtime_metadata_dir/bash" >/dev/null 2>&1; then
+              printf 'bash_file_type=%s\n' "$(file -b "$runtime_metadata_dir/bash")"
+            else
+              echo "bash_file_unavailable"
+            fi
+            rm -rf "$runtime_metadata_dir"
+          else
+            echo "gateway_container_unavailable"
+          fi
 
           section "docker compose ps"
           sudo docker compose ps || true
