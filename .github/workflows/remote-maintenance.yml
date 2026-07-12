@@ -38,11 +38,23 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const response = await github.rest.actions.getRepoVariable({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: "IB_GATEWAY_TARGETS_JSON"
-            });
+            const variableName = "IB_GATEWAY_TARGETS_JSON";
+            let response;
+            try {
+              response = await github.rest.actions.getRepoVariable({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: variableName
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              // These jobs do not bind a GitHub environment, so vars-context
+              // precedence is repository first, then organization.
+              response = await github.rest.actions.getOrgVariable({
+                org: context.repo.owner,
+                name: variableName
+              });
+            }
             const raw = response.data.value;
             if (!raw || !raw.trim()) {
               core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
@@ -100,11 +112,23 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const response = await github.rest.actions.getRepoVariable({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: "IB_GATEWAY_TARGETS_JSON"
-            });
+            const variableName = "IB_GATEWAY_TARGETS_JSON";
+            let response;
+            try {
+              response = await github.rest.actions.getRepoVariable({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: variableName
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              // These jobs do not bind a GitHub environment, so vars-context
+              // precedence is repository first, then organization.
+              response = await github.rest.actions.getOrgVariable({
+                org: context.repo.owner,
+                name: variableName
+              });
+            }
             const raw = response.data.value;
             if (!raw || !raw.trim()) {
               core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
