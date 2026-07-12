@@ -172,8 +172,8 @@ import subprocess
 import sys
 
 workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
-start = "            python3 -c '\n"
-end = "\n          '\n"
+start = "            python3 -c \"$(cat <<'PY'\n"
+end = "\n          PY\n          )\"\n"
 code = workflow.split(start, 1)[1].split(end, 1)[0]
 code = "\n".join(line.removeprefix("          ") for line in code.splitlines())
 sample = (

@@ -222,7 +222,7 @@ jobs:
           REMOTE_DIAG_COMMAND="${REMOTE_DIAG_COMMAND/__DEPLOY_PATH__/${deploy_path_quoted}}"
 
           redact_diagnostics() {
-            python3 -c '
+            python3 -c "$(cat <<'PY'
           import re
           import sys
 
@@ -245,7 +245,8 @@ jobs:
               line = sensitive_assignment_pattern.sub(r"\1\2<REDACTED>\n", line)
               line = security_code_pattern.sub(r"\1<REDACTED>\n", line)
               sys.stdout.write(line)
-          '
+          PY
+          )"
           }
 
           # Keep SSH/authentication failures visible even though output is filtered.
