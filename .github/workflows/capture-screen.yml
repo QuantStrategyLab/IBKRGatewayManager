@@ -31,6 +31,9 @@ concurrency:
 jobs:
   resolve:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     outputs:
       matrix: ${{ steps.resolve.outputs.matrix }}
     steps:
@@ -39,7 +42,12 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};
+            const response = await github.rest.actions.getRepoVariable({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: "IB_GATEWAY_TARGETS_JSON"
+            });
+            const raw = response.data.value;
             if (!raw || !raw.trim()) {
               core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
               return;
@@ -85,6 +93,7 @@ jobs:
       matrix: ${{ fromJson(needs.resolve.outputs.matrix) }}
       fail-fast: false
     permissions:
+      actions: read
       contents: read
       id-token: write
     env:
@@ -96,7 +105,12 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};
+            const response = await github.rest.actions.getRepoVariable({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: "IB_GATEWAY_TARGETS_JSON"
+            });
+            const raw = response.data.value;
             if (!raw || !raw.trim()) {
               core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
               return;

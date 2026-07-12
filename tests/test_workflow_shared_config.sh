@@ -228,7 +228,10 @@ for resolver_workflow in "$repo_dir/.github/workflows/diagnose.yml" \
   "$repo_dir/.github/workflows/capture-screen.yml" \
   "$repo_dir/.github/workflows/remote-maintenance.yml"
 do
-  grep -Fq 'const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};' "$resolver_workflow"
+  grep -Fq 'const response = await github.rest.actions.getRepoVariable({' "$resolver_workflow"
+  grep -Fq 'name: "IB_GATEWAY_TARGETS_JSON"' "$resolver_workflow"
+  grep -Fq 'actions: read' "$resolver_workflow"
+  ! grep -Fq 'toJSON(vars.IB_GATEWAY_TARGETS_JSON)' "$resolver_workflow"
   grep -Fq 'return digits.length >= 4 ? `U***${digits.slice(-4)}` : "<target>";' "$resolver_workflow"
   grep -Fq 'if (value) core.setSecret(String(value));' "$resolver_workflow"
   grep -Fq 'core.setOutput("matrix", JSON.stringify({include: matrixTargets}));' "$resolver_workflow"
