@@ -226,7 +226,7 @@ jobs:
           import re
           import sys
 
-          account_pattern = re.compile(r"(?i)\bu(\d{4,})\b")
+          account_pattern = re.compile(r"(?i)\b(DU|U|F)(\d{4,})\b")
           email_pattern = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
           ipv4_pattern = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
           sensitive_assignment_pattern = re.compile(
@@ -236,7 +236,10 @@ jobs:
           security_code_pattern = re.compile(r"(?i)(\bsecurity\s+code\s*[:=]\s*).*$")
 
           for line in sys.stdin:
-              line = account_pattern.sub(lambda match: f"U***{match.group(1)[-4:]}", line)
+              line = account_pattern.sub(
+                  lambda match: f"{match.group(1).upper()}***{match.group(2)[-4:]}",
+                  line,
+              )
               line = email_pattern.sub("<EMAIL>", line)
               line = ipv4_pattern.sub("<IP>", line)
               line = sensitive_assignment_pattern.sub(r"\1\2<REDACTED>\n", line)

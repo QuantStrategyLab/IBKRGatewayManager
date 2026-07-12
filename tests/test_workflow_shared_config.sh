@@ -177,6 +177,7 @@ code = workflow.split(start, 1)[1].split(end, 1)[0]
 code = "\n".join(line.removeprefix("          ") for line in code.splitlines())
 sample = (
     "account=U12345678 host=10.20.30.40 user@example.com\n"
+    "paper_account=DU7654321 advisor_account=F9876543\n"
     "TOTP_SECRET=JBSWY3DPEHPK3PXP\n"
     "Authorization: Bearer header.payload.signature\n"
     "Security code: 123456\n"
@@ -189,11 +190,14 @@ result = subprocess.run(
     text=True,
 )
 assert "account=U***5678 host=<IP> <EMAIL>" in result.stdout
+assert "paper_account=DU***4321 advisor_account=F***6543" in result.stdout
 assert "TOTP_SECRET=<REDACTED>" in result.stdout
 assert "Authorization: <REDACTED>" in result.stdout
 assert "Security code: <REDACTED>" in result.stdout
 for sensitive in (
     "U12345678",
+    "DU7654321",
+    "F9876543",
     "10.20.30.40",
     "user@example.com",
     "JBSWY3DPEHPK3PXP",
