@@ -244,10 +244,13 @@ jobs:
               r"(?:%[0-9a-z_.-]+)?(?![0-9a-f:])"
           )
           sensitive_assignment_pattern = re.compile(
-              r"(?i)\b([A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|COOKIE|AUTHORIZATION)[A-Z0-9_]*)"
-              r"(\s*[:=]\s*).*$"
+              r"(?i)(?<![A-Z0-9_])"
+              r"([\"\x27]?[A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|COOKIE|AUTHORIZATION)"
+              r"[A-Z0-9_]*[\"\x27]?\s*[:=]\s*).*(\r?\n)?$"
           )
-          security_code_pattern = re.compile(r"(?i)(\bsecurity\s+code\s*[:=]\s*).*$")
+          security_code_pattern = re.compile(
+              r"(?i)(\bsecurity\s+code\s*[:=]\s*).*(\r?\n)?$"
+          )
 
           def redact_ipv6_candidate(match):
               candidate = match.group(0)
@@ -266,8 +269,8 @@ jobs:
               line = email_pattern.sub("<EMAIL>", line)
               line = ipv4_pattern.sub("<IP>", line)
               line = ipv6_candidate_pattern.sub(redact_ipv6_candidate, line)
-              line = sensitive_assignment_pattern.sub(r"\1\2<REDACTED>\n", line)
-              line = security_code_pattern.sub(r"\1<REDACTED>\n", line)
+              line = sensitive_assignment_pattern.sub(r"\1<REDACTED>\2", line)
+              line = security_code_pattern.sub(r"\1<REDACTED>\2", line)
               sys.stdout.write(line)
           PY
           )"

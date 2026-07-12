@@ -159,7 +159,7 @@ grep -Fq 'bash ./scripts/install_gateway_health_watcher.sh __IB_GATEWAY_MODE__' 
 
 ! grep -Fxq '        shell: python3' "$diagnose_workflow_file"
 grep -Fq 'redact_diagnostics()' "$diagnose_workflow_file"
-grep -Fq 'sensitive_assignment_pattern.sub(r"\1\2<REDACTED>\n", line)' "$diagnose_workflow_file"
+grep -Fq 'sensitive_assignment_pattern.sub(r"\1<REDACTED>\2", line)' "$diagnose_workflow_file"
 grep -Fq 'set -o pipefail' "$diagnose_workflow_file"
 grep -Fq '| redact_diagnostics' "$diagnose_workflow_file"
 ! grep -Fq 'actions/checkout' "$diagnose_workflow_file"
@@ -181,6 +181,8 @@ sample = (
     "paper_account=DU7654321 advisor_account=F9876543\n"
     "TOTP_SECRET=JBSWY3DPEHPK3PXP\n"
     "Authorization: Bearer header.payload.signature\n"
+    'json={"access_token":"json-secret","other":1}\n'
+    '"cookie": "session-secret; second=value"\n'
     "Security code: 123456\n"
 )
 result = subprocess.run(
@@ -195,7 +197,10 @@ assert "network=<IP> scoped=<IP> punctuation=<IP>." in result.stdout
 assert "paper_account=DU***4321 advisor_account=F***6543" in result.stdout
 assert "TOTP_SECRET=<REDACTED>" in result.stdout
 assert "Authorization: <REDACTED>" in result.stdout
+assert 'json={"access_token":<REDACTED>' in result.stdout
+assert '"cookie": <REDACTED>' in result.stdout
 assert "Security code: <REDACTED>" in result.stdout
+assert "\n\n" not in result.stdout
 for sensitive in (
     "U12345678",
     "DU7654321",
@@ -206,6 +211,8 @@ for sensitive in (
     "user@example.com",
     "JBSWY3DPEHPK3PXP",
     "header.payload.signature",
+    "json-secret",
+    "session-secret",
     "123456",
 ):
     assert sensitive not in result.stdout
