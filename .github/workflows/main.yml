@@ -33,6 +33,11 @@ on:
         required: false
         default: false
         type: boolean
+      rebuild_without_cache:
+        description: force a clean image rebuild during full manual deploy
+        required: false
+        default: false
+        type: boolean
       sync_github_secrets_to_secret_manager:
         description: write current GitHub secrets into Secret Manager before deploy
         required: false
@@ -229,6 +234,7 @@ jobs:
       WORKFLOW_DISPATCH_MODE: ${{ github.event.inputs.deploy_mode }}
       WORKFLOW_DISPATCH_TARGET: ${{ github.event.inputs.target }}
       WORKFLOW_DISPATCH_ALLOW_VM_RESET: ${{ github.event.inputs.allow_vm_reset }}
+      WORKFLOW_DISPATCH_REBUILD_WITHOUT_CACHE: ${{ github.event.inputs.rebuild_without_cache }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -683,7 +689,12 @@ jobs:
           sudo systemctl stop "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "\${IBKR_GATEWAY_HEALTHCHECK_SERVICE}" 2>/dev/null || true
           sudo systemctl stop "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" "\${IBKR_GATEWAY_DAILY_RESTART_SERVICE}" 2>/dev/null || true
           sudo bash ./scripts/ensure_host_swap.sh
-          sudo docker compose build "\${compose_service_name}"
+          if [ "${WORKFLOW_DISPATCH_REBUILD_WITHOUT_CACHE:-false}" = 'true' ]; then
+            echo "[\$(date -u +%FT%TZ)] Building without cache"
+            sudo docker compose build --no-cache "\${compose_service_name}"
+          else
+            sudo docker compose build "\${compose_service_name}"
+          fi
           sudo docker compose down
           sudo docker compose up -d "\${compose_service_name}"
 
