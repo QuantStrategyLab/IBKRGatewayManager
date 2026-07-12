@@ -248,5 +248,7 @@ jobs:
           '
           }
 
+          # Keep SSH/authentication failures visible even though output is filtered.
+          set -o pipefail
           gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DIAG_COMMAND}" 2>&1 \
             | redact_diagnostics
