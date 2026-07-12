@@ -25,43 +25,42 @@ jobs:
     steps:
       - name: Resolve gateway targets
         id: resolve
-        env:
-          TARGETS_JSON: ${{ vars.IB_GATEWAY_TARGETS_JSON }}
-          SELECTED_TARGET: ${{ github.event.inputs.target || 'all' }}
-        run: |
-          import json, os, sys
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};
+            if (!raw || !raw.trim()) {
+              core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
+              return;
+            }
 
-          raw = os.environ.get("TARGETS_JSON", "").strip()
-          if not raw:
-              raise SystemExit("IB_GATEWAY_TARGETS_JSON is required")
+            const loaded = JSON.parse(raw);
+            const targets = Array.isArray(loaded)
+              ? loaded
+              : Object.entries(loaded).map(([name, config]) => ({...config, name}));
+            if (!Array.isArray(targets)) {
+              core.setFailed("IB_GATEWAY_TARGETS_JSON must be an object or list");
+              return;
+            }
 
-          loaded = json.loads(raw)
-          targets = []
-          if isinstance(loaded, dict):
-              for name, config in loaded.items():
-                  cfg = dict(config)
-                  cfg["name"] = name
-                  targets.append(cfg)
-          elif isinstance(loaded, list):
-              targets = loaded
-          else:
-              raise SystemExit("IB_GATEWAY_TARGETS_JSON must be an object or list")
+            const selectedName = ${{ toJSON(github.event.inputs.target || 'all') }};
+            const selected = selectedName === "all"
+              ? targets
+              : targets.filter((target) => target.name === selectedName);
+            if (!selected.length) {
+              core.setFailed("Unknown gateway target; choose one of the configured targets");
+              return;
+            }
 
-          selected_name = os.environ.get("SELECTED_TARGET", "all")
-          if selected_name == "all":
-              selected = targets
-          else:
-              selected = [t for t in targets if t["name"] == selected_name]
-              if not selected:
-                  known = ", ".join(t["name"] for t in targets)
-                  raise SystemExit(f"Unknown target {selected_name!r}. Known: {known}")
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write("matrix=" + json.dumps({"target": selected}, separators=(",", ":")) + "\n")
-          print("Targets: " + ", ".join(t["name"] for t in selected))
-        shell: python3
+            const maskedTarget = (name) => {
+              const digits = String(name).replace(/\D/g, "");
+              return digits.length >= 4 ? `U***${digits.slice(-4)}` : "<target>";
+            };
+            core.info(`Targets: ${selected.map((target) => maskedTarget(target.name)).join(", ")}`);
+            core.setOutput("matrix", JSON.stringify({target: selected}));
 
   diagnose:
+    name: Diagnose gateway target
     needs: resolve
     if: needs.resolve.outputs.matrix != '{"target":[]}'
     runs-on: ubuntu-latest
@@ -72,28 +71,42 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      TARGET_NAME: ${{ matrix.target.name }}
-      GCP_PROJECT_ID: ${{ matrix.target.gcp_project_id }}
-      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ matrix.target.gcp_workload_identity_provider }}
-      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ matrix.target.gcp_workload_identity_service_account }}
-      GCE_USER: ${{ matrix.target.gce_user }}
-      GCE_INSTANCE_NAME: ${{ matrix.target.gce_instance_name }}
-      GCE_ZONE: ${{ matrix.target.gce_zone }}
-      DEPLOY_PATH: ${{ matrix.target.deploy_path }}
-      SSH_PRIVATE_KEY_SECRET_NAME: ${{ matrix.target.ssh_private_key_secret_name }}
     steps:
+      - name: Mask target metadata
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const metadata = {
+              TARGET_NAME: ${{ toJSON(matrix.target.name) }},
+              GCP_PROJECT_ID: ${{ toJSON(matrix.target.gcp_project_id) }},
+              GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ toJSON(matrix.target.gcp_workload_identity_provider) }},
+              GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ toJSON(matrix.target.gcp_workload_identity_service_account) }},
+              GCE_USER: ${{ toJSON(matrix.target.gce_user) }},
+              GCE_INSTANCE_NAME: ${{ toJSON(matrix.target.gce_instance_name) }},
+              GCE_ZONE: ${{ toJSON(matrix.target.gce_zone) }},
+              DEPLOY_PATH: ${{ toJSON(matrix.target.deploy_path) }},
+              SSH_PRIVATE_KEY_SECRET_NAME: ${{ toJSON(matrix.target.ssh_private_key_secret_name) }},
+              IB_GATEWAY_MODE: ${{ toJSON(matrix.target.mode) }},
+              IB_GATEWAY_CONTAINER_NAME: ${{ toJSON(matrix.target.container_name) }},
+              IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ toJSON(matrix.target.compose_service_name) }},
+              IB_GATEWAY_UNIT_SUFFIX: ${{ toJSON(matrix.target.unit_suffix || '') }}
+            };
+            for (const [name, value] of Object.entries(metadata)) {
+              if (value) core.setSecret(String(value));
+              core.exportVariable(name, value || "");
+            }
+
       - name: Authenticate to Google Cloud
         id: auth
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ matrix.target.gcp_workload_identity_provider }}
+          service_account: ${{ matrix.target.gcp_workload_identity_service_account }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
+          project_id: ${{ matrix.target.gcp_project_id }}
           version: '>= 416.0.0'
 
       - name: Prepare SSH key
@@ -217,4 +230,53 @@ jobs:
           deploy_path_quoted="$(printf '%q' "${DEPLOY_PATH}")"
           REMOTE_DIAG_COMMAND="${REMOTE_DIAG_COMMAND/__DEPLOY_PATH__/${deploy_path_quoted}}"
 
-          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DIAG_COMMAND}"
+          redact_diagnostics() {
+            python3 -c "$(cat <<'PY'
+          import ipaddress
+          import re
+          import sys
+
+          account_pattern = re.compile(r"(?i)\b(DU|U|F)(\d{4,})\b")
+          email_pattern = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+          ipv4_pattern = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\d)")
+          ipv6_candidate_pattern = re.compile(
+              r"(?i)(?<![0-9a-f:])(?:[0-9a-f]{0,4}:){2,}[0-9a-f]{0,4}"
+              r"(?:%[0-9a-z_.-]+)?(?![0-9a-f:])"
+          )
+          sensitive_assignment_pattern = re.compile(
+              r"(?i)(?<![A-Z0-9_])"
+              r"([\"\x27]?[A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|COOKIE|AUTHORIZATION)"
+              r"[A-Z0-9_]*[\"\x27]?\s*[:=]\s*).*(\r?\n)?$"
+          )
+          security_code_pattern = re.compile(
+              r"(?i)(\bsecurity\s+code\s*[:=]\s*).*(\r?\n)?$"
+          )
+
+          def redact_ipv6_candidate(match):
+              candidate = match.group(0)
+              address = candidate.split("%", 1)[0]
+              try:
+                  ipaddress.IPv6Address(address)
+              except ipaddress.AddressValueError:
+                  return candidate
+              return "<IP>"
+
+          for line in sys.stdin:
+              line = account_pattern.sub(
+                  lambda match: f"{match.group(1).upper()}***{match.group(2)[-4:]}",
+                  line,
+              )
+              line = email_pattern.sub("<EMAIL>", line)
+              line = ipv4_pattern.sub("<IP>", line)
+              line = ipv6_candidate_pattern.sub(redact_ipv6_candidate, line)
+              line = sensitive_assignment_pattern.sub(r"\1<REDACTED>\2", line)
+              line = security_code_pattern.sub(r"\1<REDACTED>\2", line)
+              sys.stdout.write(line)
+          PY
+          )"
+          }
+
+          # Keep SSH/authentication failures visible even though output is filtered.
+          set -o pipefail
+          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DIAG_COMMAND}" 2>&1 \
+            | redact_diagnostics

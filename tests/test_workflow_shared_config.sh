@@ -4,6 +4,7 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 workflow_file="$repo_dir/.github/workflows/main.yml"
 maintenance_workflow_file="$repo_dir/.github/workflows/remote-maintenance.yml"
+diagnose_workflow_file="$repo_dir/.github/workflows/diagnose.yml"
 
 grep -Fq 'target:' "$workflow_file"
 grep -Fq 'IB_GATEWAY_TARGETS_JSON' "$workflow_file"
@@ -146,12 +147,90 @@ done
 grep -Fq 'stop-gateway' "$maintenance_workflow_file"
 grep -Fq 'restart-gateway' "$maintenance_workflow_file"
 grep -Fq 'status' "$maintenance_workflow_file"
-grep -Fq 'DEPLOY_PATH: ${{ matrix.target.deploy_path }}' "$maintenance_workflow_file"
-grep -Fq 'IB_GATEWAY_MODE: ${{ matrix.target.mode }}' "$maintenance_workflow_file"
-grep -Fq 'IB_GATEWAY_CONTAINER_NAME: ${{ matrix.target.container_name }}' "$maintenance_workflow_file"
-grep -Fq 'IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ matrix.target.compose_service_name }}' "$maintenance_workflow_file"
+grep -Fq 'DEPLOY_PATH: ${{ toJSON(matrix.target.deploy_path) }}' "$maintenance_workflow_file"
+grep -Fq 'IB_GATEWAY_MODE: ${{ toJSON(matrix.target.mode) }}' "$maintenance_workflow_file"
+grep -Fq 'IB_GATEWAY_CONTAINER_NAME: ${{ toJSON(matrix.target.container_name) }}' "$maintenance_workflow_file"
+grep -Fq 'IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ toJSON(matrix.target.compose_service_name) }}' "$maintenance_workflow_file"
 grep -Fq 'sudo systemctl disable --now' "$maintenance_workflow_file"
 grep -Fq 'sudo docker update --restart=no "${container_name}"' "$maintenance_workflow_file"
 grep -Fq 'sudo docker compose down' "$maintenance_workflow_file"
 grep -Fq 'sudo docker compose up -d --no-build "${compose_service_name}"' "$maintenance_workflow_file"
 grep -Fq 'bash ./scripts/install_gateway_health_watcher.sh __IB_GATEWAY_MODE__' "$maintenance_workflow_file"
+
+! grep -Fxq '        shell: python3' "$diagnose_workflow_file"
+grep -Fq 'redact_diagnostics()' "$diagnose_workflow_file"
+grep -Fq 'sensitive_assignment_pattern.sub(r"\1<REDACTED>\2", line)' "$diagnose_workflow_file"
+grep -Fq 'set -o pipefail' "$diagnose_workflow_file"
+grep -Fq '| redact_diagnostics' "$diagnose_workflow_file"
+! grep -Fq 'actions/checkout' "$diagnose_workflow_file"
+! grep -R -Fxq '        shell: python3' "$repo_dir/.github/workflows"
+
+python3 - "$diagnose_workflow_file" <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+
+workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
+start = "            python3 -c \"$(cat <<'PY'\n"
+end = "\n          PY\n          )\"\n"
+code = workflow.split(start, 1)[1].split(end, 1)[0]
+code = "\n".join(line.removeprefix("          ") for line in code.splitlines())
+sample = (
+    "account=U12345678 host=10.20.30.40 user@example.com\n"
+    "network=2001:db8::1 scoped=fe80::1%eth0 punctuation=10.20.30.40.\n"
+    "paper_account=DU7654321 advisor_account=F9876543\n"
+    "TOTP_SECRET=JBSWY3DPEHPK3PXP\n"
+    "Authorization: Bearer header.payload.signature\n"
+    'json={"access_token":"json-secret","other":1}\n'
+    '"cookie": "session-secret; second=value"\n'
+    "Security code: 123456\n"
+)
+result = subprocess.run(
+    [sys.executable, "-c", code],
+    input=sample,
+    capture_output=True,
+    check=True,
+    text=True,
+)
+assert "account=U***5678 host=<IP> <EMAIL>" in result.stdout
+assert "network=<IP> scoped=<IP> punctuation=<IP>." in result.stdout
+assert "paper_account=DU***4321 advisor_account=F***6543" in result.stdout
+assert "TOTP_SECRET=<REDACTED>" in result.stdout
+assert "Authorization: <REDACTED>" in result.stdout
+assert 'json={"access_token":<REDACTED>' in result.stdout
+assert '"cookie": <REDACTED>' in result.stdout
+assert "Security code: <REDACTED>" in result.stdout
+assert "\n\n" not in result.stdout
+for sensitive in (
+    "U12345678",
+    "DU7654321",
+    "F9876543",
+    "10.20.30.40",
+    "2001:db8::1",
+    "fe80::1%eth0",
+    "user@example.com",
+    "JBSWY3DPEHPK3PXP",
+    "header.payload.signature",
+    "json-secret",
+    "session-secret",
+    "123456",
+):
+    assert sensitive not in result.stdout
+PY
+
+for resolver_workflow in "$repo_dir/.github/workflows/diagnose.yml" \
+  "$repo_dir/.github/workflows/capture-screen.yml" \
+  "$repo_dir/.github/workflows/remote-maintenance.yml"
+do
+  grep -Fq 'const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};' "$resolver_workflow"
+  grep -Fq 'return digits.length >= 4 ? `U***${digits.slice(-4)}` : "<target>";' "$resolver_workflow"
+  grep -Fq 'if (value) core.setSecret(String(value));' "$resolver_workflow"
+  grep -Fq 'core.setFailed("Unknown gateway target; choose one of the configured targets")' "$resolver_workflow"
+  ! grep -Fq 'Unknown gateway target: ${selectedName}' "$resolver_workflow"
+  ! grep -Fq 'TARGETS_JSON: ${{ vars.IB_GATEWAY_TARGETS_JSON }}' "$resolver_workflow"
+  ! grep -Fq 'print("Targets: " + ", ".join(t["name"] for t in selected))' "$resolver_workflow"
+done
+
+grep -Fq 'name: Diagnose gateway target' "$repo_dir/.github/workflows/diagnose.yml"
+grep -Fq 'name: Capture gateway screen' "$repo_dir/.github/workflows/capture-screen.yml"
+grep -Fq 'name: Maintain gateway target' "$repo_dir/.github/workflows/remote-maintenance.yml"
