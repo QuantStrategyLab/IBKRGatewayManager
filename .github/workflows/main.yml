@@ -28,6 +28,11 @@ on:
         options:
           - keepalive
           - full
+      allow_vm_reset:
+        description: permit automatic VM reset after SSH/SCP/deploy failure
+        required: false
+        default: false
+        type: boolean
       sync_github_secrets_to_secret_manager:
         description: write current GitHub secrets into Secret Manager before deploy
         required: false
@@ -223,6 +228,7 @@ jobs:
       VNC_SERVER_PASSWORD_SECRET_NAME: ${{ matrix.target.vnc_server_password_secret_name }}
       WORKFLOW_DISPATCH_MODE: ${{ github.event.inputs.deploy_mode }}
       WORKFLOW_DISPATCH_TARGET: ${{ github.event.inputs.target }}
+      WORKFLOW_DISPATCH_ALLOW_VM_RESET: ${{ github.event.inputs.allow_vm_reset }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -511,6 +517,12 @@ jobs:
           )
 
           reset_instance_and_wait_for_ssh() {
+            if [ "${DEPLOY_EVENT_NAME}" = "workflow_dispatch" ] \
+              && [ "${WORKFLOW_DISPATCH_ALLOW_VM_RESET:-false}" != "true" ]; then
+              echo "Manual workflow VM reset is disabled; failing closed." >&2
+              return 1
+            fi
+
             log_step "Resetting ${GCE_INSTANCE_NAME} after SSH/SCP failure"
             gcloud compute instances reset "${GCE_INSTANCE_NAME}" \
               --project "${GCP_PROJECT_ID}" \
