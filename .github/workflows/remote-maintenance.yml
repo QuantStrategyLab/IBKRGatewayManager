@@ -67,6 +67,7 @@ jobs:
             core.setOutput("matrix", JSON.stringify({target: selected}));
 
   maintenance:
+    name: Maintain gateway target
     needs: resolve
     if: needs.resolve.outputs.matrix != '{"target":[]}'
     runs-on: ubuntu-latest

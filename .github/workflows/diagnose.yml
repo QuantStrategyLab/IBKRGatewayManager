@@ -60,6 +60,7 @@ jobs:
             core.setOutput("matrix", JSON.stringify({target: selected}));
 
   diagnose:
+    name: Diagnose gateway target
     needs: resolve
     if: needs.resolve.outputs.matrix != '{"target":[]}'
     runs-on: ubuntu-latest

@@ -221,3 +221,7 @@ do
   ! grep -Fq 'TARGETS_JSON: ${{ vars.IB_GATEWAY_TARGETS_JSON }}' "$resolver_workflow"
   ! grep -Fq 'print("Targets: " + ", ".join(t["name"] for t in selected))' "$resolver_workflow"
 done
+
+grep -Fq 'name: Diagnose gateway target' "$repo_dir/.github/workflows/diagnose.yml"
+grep -Fq 'name: Capture gateway screen' "$repo_dir/.github/workflows/capture-screen.yml"
+grep -Fq 'name: Maintain gateway target' "$repo_dir/.github/workflows/remote-maintenance.yml"
