@@ -225,6 +225,8 @@ do
   grep -Fq 'const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};' "$resolver_workflow"
   grep -Fq 'return digits.length >= 4 ? `U***${digits.slice(-4)}` : "<target>";' "$resolver_workflow"
   grep -Fq 'if (value) core.setSecret(String(value));' "$resolver_workflow"
+  grep -Fq 'core.setFailed("Unknown gateway target; choose one of the configured targets")' "$resolver_workflow"
+  ! grep -Fq 'Unknown gateway target: ${selectedName}' "$resolver_workflow"
   ! grep -Fq 'TARGETS_JSON: ${{ vars.IB_GATEWAY_TARGETS_JSON }}' "$resolver_workflow"
   ! grep -Fq 'print("Targets: " + ", ".join(t["name"] for t in selected))' "$resolver_workflow"
 done

@@ -59,7 +59,7 @@ jobs:
               ? targets
               : targets.filter((target) => target.name === selectedName);
             if (!selected.length) {
-              core.setFailed(`Unknown gateway target: ${selectedName}`);
+              core.setFailed("Unknown gateway target; choose one of the configured targets");
               return;
             }
 
