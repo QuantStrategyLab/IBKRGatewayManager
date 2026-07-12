@@ -59,7 +59,7 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("matrix=" + json.dumps({"target": selected}, separators=(",", ":")) + "\n")
           print("Targets: " + ", ".join(t["name"] for t in selected))
-        shell: python3
+        shell: python3 {0}
 
   maintenance:
     needs: resolve

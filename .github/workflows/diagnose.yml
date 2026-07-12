@@ -58,8 +58,12 @@ jobs:
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("matrix=" + json.dumps({"target": selected}, separators=(",", ":")) + "\n")
-          print("Targets: " + ", ".join(t["name"] for t in selected))
-        shell: python3
+          def masked_target(name):
+              digits = "".join(char for char in str(name) if char.isdigit())
+              return f"U***{digits[-4:]}" if len(digits) >= 4 else "<target>"
+
+          print("Targets: " + ", ".join(masked_target(t["name"]) for t in selected))
+        shell: python3 {0}
 
   diagnose:
     needs: resolve
@@ -83,6 +87,9 @@ jobs:
       DEPLOY_PATH: ${{ matrix.target.deploy_path }}
       SSH_PRIVATE_KEY_SECRET_NAME: ${{ matrix.target.ssh_private_key_secret_name }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
       - name: Authenticate to Google Cloud
         id: auth
         uses: google-github-actions/auth@v3
@@ -217,4 +224,5 @@ jobs:
           deploy_path_quoted="$(printf '%q' "${DEPLOY_PATH}")"
           REMOTE_DIAG_COMMAND="${REMOTE_DIAG_COMMAND/__DEPLOY_PATH__/${deploy_path_quoted}}"
 
-          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DIAG_COMMAND}"
+          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DIAG_COMMAND}" 2>&1 \
+            | python3 scripts/redact_gateway_diagnostics.py

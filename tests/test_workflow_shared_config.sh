@@ -4,6 +4,7 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 workflow_file="$repo_dir/.github/workflows/main.yml"
 maintenance_workflow_file="$repo_dir/.github/workflows/remote-maintenance.yml"
+diagnose_workflow_file="$repo_dir/.github/workflows/diagnose.yml"
 
 grep -Fq 'target:' "$workflow_file"
 grep -Fq 'IB_GATEWAY_TARGETS_JSON' "$workflow_file"
@@ -155,3 +156,8 @@ grep -Fq 'sudo docker update --restart=no "${container_name}"' "$maintenance_wor
 grep -Fq 'sudo docker compose down' "$maintenance_workflow_file"
 grep -Fq 'sudo docker compose up -d --no-build "${compose_service_name}"' "$maintenance_workflow_file"
 grep -Fq 'bash ./scripts/install_gateway_health_watcher.sh __IB_GATEWAY_MODE__' "$maintenance_workflow_file"
+
+grep -Fq 'shell: python3 {0}' "$diagnose_workflow_file"
+! grep -Fxq '        shell: python3' "$diagnose_workflow_file"
+grep -Fq '| python3 scripts/redact_gateway_diagnostics.py' "$diagnose_workflow_file"
+! grep -R -Fxq '        shell: python3' "$repo_dir/.github/workflows"
