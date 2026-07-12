@@ -119,10 +119,28 @@ jobs:
               IB_GATEWAY_COMPOSE_SERVICE_NAME: target.compose_service_name,
               IB_GATEWAY_UNIT_SUFFIX: target.unit_suffix || ""
             };
+            const authenticationOutputs = new Set([
+              "GCP_PROJECT_ID",
+              "GCP_WORKLOAD_IDENTITY_PROVIDER",
+              "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"
+            ]);
             for (const [name, value] of Object.entries(metadata)) {
-              if (value) core.setSecret(String(value));
+              if (value && !authenticationOutputs.has(name)) core.setSecret(String(value));
               core.exportVariable(name, value || "");
-              core.setOutput(name.toLowerCase(), value || "");
+              if (authenticationOutputs.has(name)) core.setOutput(name.toLowerCase(), value || "");
+            }
+
+      - name: Mask authentication metadata
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const values = [
+              ${{ toJSON(steps.metadata.outputs.gcp_project_id) }},
+              ${{ toJSON(steps.metadata.outputs.gcp_workload_identity_provider) }},
+              ${{ toJSON(steps.metadata.outputs.gcp_workload_identity_service_account) }}
+            ];
+            for (const value of values) {
+              if (value) core.setSecret(String(value));
             }
 
       - name: Authenticate to Google Cloud
@@ -223,17 +241,33 @@ jobs:
             fi
             runtime_metadata_dir="$(mktemp -d)"
             if sudo docker cp "$CONTAINER_NAME":/home/ibgateway/scripts/run.sh "$runtime_metadata_dir/run.sh" >/dev/null 2>&1; then
-              printf 'run_file_type=%s\n' "$(file -b "$runtime_metadata_dir/run.sh")"
-              stat -c 'run_mode=%a run_size=%s' "$runtime_metadata_dir/run.sh" || true
-              printf 'run_first_bytes='
-              od -An -tx1 -N16 "$runtime_metadata_dir/run.sh" | tr -d ' \n'
-              printf '\n'
-              sha256sum "$runtime_metadata_dir/run.sh" | awk '{print "run_sha256=" $1}'
+              if command -v file >/dev/null 2>&1; then
+                printf 'run_file_type=%s\n' "$(file -b "$runtime_metadata_dir/run.sh" || true)"
+              else
+                echo "run_file_type_unavailable"
+              fi
+              stat -c 'run_mode=%a run_size=%s' "$runtime_metadata_dir/run.sh" 2>/dev/null || echo "run_stat_unavailable"
+              if command -v od >/dev/null 2>&1; then
+                printf 'run_first_bytes='
+                od -An -tx1 -N16 "$runtime_metadata_dir/run.sh" 2>/dev/null | tr -d ' \n' || true
+                printf '\n'
+              else
+                echo "run_first_bytes_unavailable"
+              fi
+              if command -v sha256sum >/dev/null 2>&1; then
+                sha256sum "$runtime_metadata_dir/run.sh" 2>/dev/null | awk '{print "run_sha256=" $1}' || true
+              else
+                echo "run_sha256_unavailable"
+              fi
             else
               echo "run_file_unavailable"
             fi
             if sudo docker cp "$CONTAINER_NAME":/bin/bash "$runtime_metadata_dir/bash" >/dev/null 2>&1; then
-              printf 'bash_file_type=%s\n' "$(file -b "$runtime_metadata_dir/bash")"
+              if command -v file >/dev/null 2>&1; then
+                printf 'bash_file_type=%s\n' "$(file -b "$runtime_metadata_dir/bash" || true)"
+              else
+                echo "bash_file_type_unavailable"
+              fi
             else
               echo "bash_file_unavailable"
             fi
