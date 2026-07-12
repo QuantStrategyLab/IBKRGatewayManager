@@ -23,4 +23,3 @@ jobs:
           bash tests/test_wait_for_ib_gateway_ready.sh
           bash tests/test_workflow_shared_config.sh
           bash tests/test_docker_compose_ports.sh
-          bash tests/test_redact_gateway_diagnostics.sh

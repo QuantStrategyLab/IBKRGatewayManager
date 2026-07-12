@@ -159,5 +159,46 @@ grep -Fq 'bash ./scripts/install_gateway_health_watcher.sh __IB_GATEWAY_MODE__' 
 
 grep -Fq 'shell: python3 {0}' "$diagnose_workflow_file"
 ! grep -Fxq '        shell: python3' "$diagnose_workflow_file"
-grep -Fq '| python3 scripts/redact_gateway_diagnostics.py' "$diagnose_workflow_file"
+grep -Fq 'redact_diagnostics()' "$diagnose_workflow_file"
+grep -Fq 'sensitive_assignment_pattern.sub(r"\1\2<REDACTED>\n", line)' "$diagnose_workflow_file"
+grep -Fq '| redact_diagnostics' "$diagnose_workflow_file"
+! grep -Fq 'actions/checkout' "$diagnose_workflow_file"
 ! grep -R -Fxq '        shell: python3' "$repo_dir/.github/workflows"
+
+python3 - "$diagnose_workflow_file" <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+
+workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
+start = "            python3 -c '\n"
+end = "\n          '\n"
+code = workflow.split(start, 1)[1].split(end, 1)[0]
+code = "\n".join(line.removeprefix("          ") for line in code.splitlines())
+sample = (
+    "account=U12345678 host=10.20.30.40 user@example.com\n"
+    "TOTP_SECRET=JBSWY3DPEHPK3PXP\n"
+    "Authorization: Bearer header.payload.signature\n"
+    "Security code: 123456\n"
+)
+result = subprocess.run(
+    [sys.executable, "-c", code],
+    input=sample,
+    capture_output=True,
+    check=True,
+    text=True,
+)
+assert "account=U***5678 host=<IP> <EMAIL>" in result.stdout
+assert "TOTP_SECRET=<REDACTED>" in result.stdout
+assert "Authorization: <REDACTED>" in result.stdout
+assert "Security code: <REDACTED>" in result.stdout
+for sensitive in (
+    "U12345678",
+    "10.20.30.40",
+    "user@example.com",
+    "JBSWY3DPEHPK3PXP",
+    "header.payload.signature",
+    "123456",
+):
+    assert sensitive not in result.stdout
+PY
