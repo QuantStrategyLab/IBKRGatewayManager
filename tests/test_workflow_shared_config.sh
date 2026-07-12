@@ -178,6 +178,7 @@ code = workflow.split(start, 1)[1].split(end, 1)[0]
 code = "\n".join(line.removeprefix("          ") for line in code.splitlines())
 sample = (
     "account=U12345678 host=10.20.30.40 user@example.com\n"
+    "network=2001:db8::1 scoped=fe80::1%eth0 punctuation=10.20.30.40.\n"
     "paper_account=DU7654321 advisor_account=F9876543\n"
     "TOTP_SECRET=JBSWY3DPEHPK3PXP\n"
     "Authorization: Bearer header.payload.signature\n"
@@ -191,6 +192,7 @@ result = subprocess.run(
     text=True,
 )
 assert "account=U***5678 host=<IP> <EMAIL>" in result.stdout
+assert "network=<IP> scoped=<IP> punctuation=<IP>." in result.stdout
 assert "paper_account=DU***4321 advisor_account=F***6543" in result.stdout
 assert "TOTP_SECRET=<REDACTED>" in result.stdout
 assert "Authorization: <REDACTED>" in result.stdout
@@ -200,6 +202,8 @@ for sensitive in (
     "DU7654321",
     "F9876543",
     "10.20.30.40",
+    "2001:db8::1",
+    "fe80::1%eth0",
     "user@example.com",
     "JBSWY3DPEHPK3PXP",
     "header.payload.signature",
@@ -207,3 +211,11 @@ for sensitive in (
 ):
     assert sensitive not in result.stdout
 PY
+
+for resolver_workflow in "$repo_dir/.github/workflows/diagnose.yml" \
+  "$repo_dir/.github/workflows/capture-screen.yml" \
+  "$repo_dir/.github/workflows/remote-maintenance.yml"
+do
+  grep -Fq 'return f"U***{digits[-4:]}" if len(digits) >= 4 else "<target>"' "$resolver_workflow"
+  ! grep -Fq 'print("Targets: " + ", ".join(t["name"] for t in selected))' "$resolver_workflow"
+done

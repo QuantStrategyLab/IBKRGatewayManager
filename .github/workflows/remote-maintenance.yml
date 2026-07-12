@@ -58,7 +58,11 @@ jobs:
                   raise SystemExit(f"Unknown target {selected_name!r}. Known: {known}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("matrix=" + json.dumps({"target": selected}, separators=(",", ":")) + "\n")
-          print("Targets: " + ", ".join(t["name"] for t in selected))
+          def masked_target(name):
+              digits = "".join(char for char in str(name) if char.isdigit())
+              return f"U***{digits[-4:]}" if len(digits) >= 4 else "<target>"
+
+          print("Targets: " + ", ".join(masked_target(t["name"]) for t in selected))
         shell: python3 {0}
 
   maintenance:
