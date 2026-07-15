@@ -51,4 +51,11 @@ class VocabularyContract(unittest.TestCase):
         drifted = Epoch("new", "2026-07-15T16:00:02.000000000Z", "2026-07-15T16:00:02.000000000Z")
         self.assertEqual(Machine(EPOCH).classify([event("2026-07-15T16:00:01Z IBC: Login attempt")], current_epoch=drifted), Decision.EPOCH_CHANGED)
 
+    def test_moving_lower_bound_does_not_change_epoch_identity(self) -> None:
+        moved_cursor = Epoch("new", EPOCH.started_at, "2026-07-15T16:00:01.000000000Z")
+        self.assertEqual(
+            Machine(EPOCH).classify([event("2026-07-15T16:00:01.000000001Z IBC: Login attempt")], current_epoch=moved_cursor),
+            Decision.PROGRESS,
+        )
+
 if __name__ == "__main__": unittest.main()

@@ -26,7 +26,10 @@ class Machine:
     def __init__(self, epoch: Epoch): self.epoch=epoch; self.terminal=False
     def begin(self, epoch: Epoch) -> None: self.epoch=epoch; self.terminal=False
     def classify(self, events: Iterable[Event], *, stable_ready: bool=False, current_epoch: Epoch|None=None) -> Decision:
-        if current_epoch is not None and current_epoch != self.epoch: return Decision.EPOCH_CHANGED
+        if current_epoch is not None and (
+            current_epoch.container_id != self.epoch.container_id
+            or current_epoch.started_at != self.epoch.started_at
+        ): return Decision.EPOCH_CHANGED
         if stable_ready: return Decision.READY
         if self.terminal: return Decision.TERMINAL
         lower=epoch_key(self.epoch.lower_bound)
