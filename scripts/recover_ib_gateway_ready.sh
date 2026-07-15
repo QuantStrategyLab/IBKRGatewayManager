@@ -88,8 +88,14 @@ gateway_epoch_activity() {
   local epoch_started_at="$2"
   local docker_activity file_activity
 
-  docker_activity="$(gateway_epoch_activity_from_docker_logs "${epoch_container_id}" "${epoch_started_at}")"
-  file_activity="$(gateway_epoch_activity_from_file_logs "${epoch_container_id}" "${epoch_started_at}")"
+  if ! docker_activity="$(gateway_epoch_activity_from_docker_logs "${epoch_container_id}" "${epoch_started_at}")"; then
+    echo "Unable to classify replacement epoch Docker logs for ${epoch_container_id}." >&2
+    return 1
+  fi
+  if ! file_activity="$(gateway_epoch_activity_from_file_logs "${epoch_container_id}" "${epoch_started_at}")"; then
+    echo "Unable to classify replacement epoch file logs for ${epoch_container_id}." >&2
+    return 1
+  fi
   if [ "${docker_activity}" = "terminal" ] || [ "${file_activity}" = "terminal" ]; then
     echo terminal
   elif [ "${docker_activity}" = "progress" ] || [ "${file_activity}" = "progress" ]; then
@@ -111,7 +117,10 @@ wait_for_ready_with_progress() {
   fi
 
   while [ "${extension}" -lt "${progress_extensions}" ]; do
-    activity="$(gateway_epoch_activity "${epoch_container_id}" "${epoch_started_at}")"
+    if ! activity="$(gateway_epoch_activity "${epoch_container_id}" "${epoch_started_at}")"; then
+      echo "Replacement epoch activity is unavailable during ${stage}; refusing to extend readiness wait." >&2
+      return 1
+    fi
     if [ "${activity}" = "terminal" ]; then
       echo "Terminal IB gateway authentication event detected during ${stage} replacement epoch; refusing to extend readiness wait." >&2
       return 1
@@ -186,7 +195,7 @@ docker compose up -d --no-build "${compose_service_name}"
 inspect_current_container
 ensure_2fa_bot_running "${epoch_container_id}"
 
-if wait_for_ready "${initial_wait_seconds}" "${epoch_container_id}"; then
+if wait_for_ready_with_progress "${initial_wait_seconds}" "initial" "${epoch_container_id}" "${epoch_started_at}"; then
   exit 0
 fi
 

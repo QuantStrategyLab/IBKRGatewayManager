@@ -81,6 +81,12 @@ replacement_terminal_sticky="$(printf '%s\n' \
   | classify "$valid_started_at")"
 test "$replacement_terminal_sticky" = 'terminal'
 
+comma_fraction_terminal="$(printf '%s\n' \
+  '2026-07-15 16:38:21,980 Server disconnected' \
+  '2026-07-15 16:38:22,100 Authentication completed' \
+  | classify "$valid_started_at")"
+test "$comma_fraction_terminal" = 'terminal'
+
 untimestamped_terminal="$(printf '%s\n' \
   'Server disconnected' \
   '2026-07-15T16:38:22.100000000Z IBC: Login attempt' \
@@ -97,11 +103,7 @@ grep -Fq 'ib_gateway_validate_replacement_epoch "${old_container_id}" "${replace
 grep -Fq 'docker logs --timestamps --since "${epoch_started_at}" "${epoch_container_id}"' "$recover_script"
 grep -Fq 'docker exec "${epoch_container_id}"' "$recover_script"
 grep -Fq 'IB_GATEWAY_CONTAINER_NAME="${epoch_container_id}"' "$recover_script"
-grep -Fq 'if wait_for_ready "${initial_wait_seconds}" "${epoch_container_id}"; then' "$recover_script"
-if grep -Fq 'wait_for_ready_with_progress "${initial_wait_seconds}"' "$recover_script"; then
-  echo 'Pre-replacement container logs must not be classified as a recovery epoch' >&2
-  exit 1
-fi
+grep -Fq 'if wait_for_ready_with_progress "${initial_wait_seconds}" "initial" "${epoch_container_id}" "${epoch_started_at}"; then' "$recover_script"
 if grep -Eq 'docker (logs|exec).*\$\{container_name\}' "$recover_script"; then
   echo 'Log classification must never fall back to the reusable container name' >&2
   exit 1
@@ -116,6 +118,8 @@ activity_line="$(grep -n 'activity="$(gateway_epoch_activity "${epoch_container_
 test -n "$ready_line"
 test -n "$activity_line"
 test "$ready_line" -lt "$activity_line"
+grep -Fq 'if ! docker_activity="$(gateway_epoch_activity_from_docker_logs' "$recover_script"
+grep -Fq 'if ! file_activity="$(gateway_epoch_activity_from_file_logs' "$recover_script"
 
 grep -Fq 'Dismissing gateway dialog candidate' "$twofa_bot"
 if grep -Fq 'Dismissing post-login dialog' "$recover_script" "$twofa_bot"; then
