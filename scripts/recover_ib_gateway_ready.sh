@@ -33,12 +33,21 @@ assessment_lower_bound() {
 import sys
 from datetime import datetime, timedelta, timezone
 stage, started_at, window = sys.argv[1:]
-start = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+def parse_rfc3339(value):
+    base, fraction = value.rstrip("Z").split(".", 1) if "." in value else (value.rstrip("Z"), "")
+    return (datetime.fromisoformat(base).replace(tzinfo=timezone.utc), int((fraction + "0" * 9)[:9]))
+
+def render(value):
+    moment, nanos = value
+    return moment.strftime("%Y-%m-%dT%H:%M:%S") + ".%09dZ" % nanos
+
+start = parse_rfc3339(started_at)
 if stage == "initial":
-    lower = max(start, datetime.now(timezone.utc) - timedelta(seconds=int(window)))
+    now = datetime.now(timezone.utc) - timedelta(seconds=int(window))
+    lower = max(start, (now.replace(microsecond=0), now.microsecond * 1000))
 else:
     lower = start
-print(lower.isoformat(timespec="microseconds").replace("+00:00", "Z"))
+print(render(lower))
 PY
 }
 
@@ -59,7 +68,13 @@ snapshot_decision() {
   } | python3 -c '
 import re, sys
 from datetime import datetime, timezone
-lower = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+def parse_stamp(value):
+    match = re.fullmatch(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z", value)
+    if not match:
+        raise ValueError("invalid timestamp")
+    return (datetime.fromisoformat(match.group(1)).replace(tzinfo=timezone.utc), int(((match.group(2) or "") + "0" * 9)[:9]))
+
+lower = parse_stamp(sys.argv[1])
 terminal = re.compile(r"IBC closing because login has not completed|(?:authentication|login).*(?:timeout|timed out|failed)", re.I)
 progress = re.compile(r"IBC: (Starting Gateway|Login attempt|Second Factor Authentication|Login has completed|Configuration tasks completed)|Authentication window found|Auto-fill submitted|Passed token authentication|Authentication completed|Security code:", re.I)
 seen_progress = False
@@ -69,7 +84,7 @@ for raw in sys.stdin:
     except ValueError: print("invalid"); raise SystemExit
     m = re.match(r"(\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d)(?:[.,:](\d{1,9}))?Z?", line)
     if not m: continue
-    stamp = datetime.fromisoformat((m.group(1).replace(" ", "T") + "." + (m.group(2) or "0") + "+00:00"))
+    stamp = (datetime.fromisoformat(m.group(1).replace(" ", "T")).replace(tzinfo=timezone.utc), int(((m.group(2) or "") + "0" * 9)[:9]))
     if stamp < lower: continue
     if terminal.search(line): print("terminal"); raise SystemExit
     if progress.search(line): seen_progress = True
