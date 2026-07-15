@@ -7,7 +7,7 @@ import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import Enum
 from typing import Iterable, TextIO
 
 
@@ -37,13 +37,14 @@ EXPLICIT_TERMINAL_MARKER = re.compile(
     re.IGNORECASE,
 )
 GENERIC_DISCONNECT_MARKER = re.compile(r"connection reset by peer|server disconnected", re.IGNORECASE)
+DISMISSAL_MARKER = re.compile(r"dismissing post-login dialog", re.IGNORECASE)
 
 
 class SnapshotError(ValueError):
     """The primitive event snapshot cannot be safely classified."""
 
 
-class Decision(StrEnum):
+class Decision(str, Enum):
     READY = "ready"
     TERMINAL = "terminal"
     PROGRESS = "progress"
@@ -55,6 +56,7 @@ class Decision(StrEnum):
 class Epoch:
     container_id: str
     started_at: str
+    event_not_before: str | None = None
     old_container_id: str | None = None
     replacement_identity: bool = False
 
@@ -66,10 +68,16 @@ class Epoch:
         ):
             raise SnapshotError("invalid replacement identity")
         parse_rfc3339_nanos(self.started_at)
+        if self.event_not_before is not None:
+            parse_rfc3339_nanos(self.event_not_before)
 
     @property
     def started_key(self) -> tuple[datetime, int]:
         return parse_rfc3339_nanos(self.started_at)
+
+    @property
+    def event_lower_bound(self) -> tuple[datetime, int]:
+        return parse_rfc3339_nanos(self.event_not_before or self.started_at)
 
 
 @dataclass(frozen=True)
@@ -176,6 +184,7 @@ class RecoveryEpochMachine:
 
     def _classify_frozen_snapshot(self, snapshot: FrozenSnapshot) -> Decision:
         progress_seen = False
+        dismissal_seen = False
         auth_context_seen = False
         generic_disconnect_seen = False
 
@@ -189,6 +198,8 @@ class RecoveryEpochMachine:
                 continue
             if EXPLICIT_TERMINAL_MARKER.search(event.line):
                 return Decision.TERMINAL
+            if DISMISSAL_MARKER.search(event.line):
+                dismissal_seen = True
             if PROGRESS_MARKER.search(event.line):
                 progress_seen = True
             if AUTH_CONTEXT_MARKER.search(event.line):
@@ -198,12 +209,16 @@ class RecoveryEpochMachine:
 
         if generic_disconnect_seen and auth_context_seen:
             return Decision.TERMINAL
+        # A dismissed dialog is ambiguous. It is only auxiliary evidence after
+        # an independent current-epoch auth/login progress marker is present.
+        if dismissal_seen and not progress_seen:
+            return Decision.NONE
         if progress_seen:
             return Decision.PROGRESS
         return Decision.NONE
 
     def _is_in_epoch(self, timestamp: ParsedTimestamp) -> bool:
-        epoch_seconds, epoch_nanos = self.epoch.started_key
+        epoch_seconds, epoch_nanos = self.epoch.event_lower_bound
         event_seconds, event_nanos = timestamp.key
         if event_seconds > epoch_seconds:
             return True
@@ -257,6 +272,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--epoch-container-id", required=True)
     parser.add_argument("--epoch-started-at", required=True)
+    parser.add_argument("--event-not-before")
     parser.add_argument("--old-container-id")
     parser.add_argument("--replacement-identity", action="store_true")
     args = parser.parse_args()
@@ -264,6 +280,7 @@ def main() -> int:
         epoch = Epoch(
             container_id=args.epoch_container_id,
             started_at=args.epoch_started_at,
+            event_not_before=args.event_not_before,
             old_container_id=args.old_container_id,
             replacement_identity=args.replacement_identity,
         )

@@ -11,6 +11,7 @@ restart_wait_seconds="${IB_GATEWAY_RECOVERY_RESTART_WAIT_SECONDS:-300}"
 recreate_wait_seconds="${IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS:-600}"
 progress_wait_seconds="${IB_GATEWAY_RECOVERY_PROGRESS_WAIT_SECONDS:-420}"
 progress_extensions="${IB_GATEWAY_RECOVERY_PROGRESS_EXTENSIONS:-2}"
+initial_snapshot_window_seconds="${IB_GATEWAY_RECOVERY_INITIAL_SNAPSHOT_WINDOW_SECONDS:-420}"
 lock_file="${IB_GATEWAY_RECOVERY_LOCK_FILE:-/var/lock/ib_gateway_recovery.lock}"
 lock_wait_seconds="${IB_GATEWAY_RECOVERY_LOCK_WAIT_SECONDS:-900}"
 classifier_wrapper="${script_dir}/classify_gateway_recovery_snapshot.sh"
@@ -51,17 +52,54 @@ inspect_epoch_identity() {
     && [[ "${epoch_started_at}" != 0001-01-01T00:00:00* ]]
 }
 
-capture_epoch_decision() {
-  local epoch_container_id="$1"
+epoch_matches_current() {
+  local expected_container_id="$1"
+  local expected_started_at="$2"
+
+  if ! inspect_epoch_identity "${container_name}"; then
+    return 1
+  fi
+  [ "${epoch_container_id}" = "${expected_container_id}" ] \
+    && [ "${epoch_started_at}" = "${expected_started_at}" ]
+}
+
+snapshot_not_before() {
+  local stage="$1"
   local epoch_started_at="$2"
-  local old_container_id="$3"
-  local replacement_identity="$4"
+
+  if [ "${stage}" != "initial" ]; then
+    echo "${epoch_started_at}"
+    return 0
+  fi
+  if ! [[ "${initial_snapshot_window_seconds}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  date -u -d "@$(( $(date +%s) - initial_snapshot_window_seconds ))" "+%Y-%m-%dT%H:%M:%SZ"
+}
+
+capture_epoch_decision() {
+  local stage="$1"
+  local epoch_container_id="$2"
+  local epoch_started_at="$3"
+  local old_container_id="$4"
+  local replacement_identity="$5"
+  local event_not_before
   local -a classifier_args
   local decision
+
+  if ! epoch_matches_current "${epoch_container_id}" "${epoch_started_at}"; then
+    echo epoch_changed
+    return 0
+  fi
+  if ! event_not_before="$(snapshot_not_before "${stage}" "${epoch_started_at}")"; then
+    echo invalid
+    return 0
+  fi
 
   classifier_args=(
     --epoch-container-id "${epoch_container_id}"
     --epoch-started-at "${epoch_started_at}"
+    --event-not-before "${event_not_before}"
   )
   if [ -n "${old_container_id}" ]; then
     classifier_args+=(--old-container-id "${old_container_id}")
@@ -71,7 +109,7 @@ capture_epoch_decision() {
   fi
 
   if ! decision="$({
-    if ! docker logs --timestamps --since "${epoch_started_at}" "${epoch_container_id}" 2>&1 \
+    if ! docker logs --timestamps --since "${event_not_before}" "${epoch_container_id}" 2>&1 \
       | sed "s/^/D\\t${epoch_container_id}\\t/"; then
       printf 'X\tdocker\n'
     fi
@@ -81,7 +119,7 @@ capture_epoch_decision() {
           exit 42
         fi
         if [ -f "${log_path}" ]; then
-          cat "${log_path}"
+          tail -n 400 "${log_path}"
         fi
       done
     ' | sed "s/^/F\\t${epoch_container_id}\\t/"; then
@@ -93,8 +131,13 @@ capture_epoch_decision() {
     return 0
   fi
 
+  if ! epoch_matches_current "${epoch_container_id}" "${epoch_started_at}"; then
+    echo epoch_changed
+    return 0
+  fi
+
   case "${decision}" in
-    terminal|progress|none|invalid)
+    terminal|progress|none|invalid|epoch_changed)
       echo "${decision}"
       ;;
     *)
@@ -117,24 +160,29 @@ wait_for_ready_with_progress() {
     return 0
   fi
 
-  # Freeze the bounded primitive event snapshot once for this attempt. Every
-  # extension decision below uses this immutable result and never rereads logs.
-  decision="$(capture_epoch_decision \
-    "${epoch_container_id}" "${epoch_started_at}" "${old_container_id}" "${replacement_identity}")"
-  case "${decision}" in
-    terminal)
-      echo "Terminal authentication event detected in the current recovery epoch; refusing extension." >&2
-      return 1
-      ;;
-    invalid|none)
-      echo "No safe progress evidence in the current immutable recovery snapshot; refusing extension." >&2
-      return 1
-      ;;
-    progress)
-      ;;
-  esac
-
   while [ "${extension}" -lt "${progress_extensions}" ]; do
+    # Each evaluation freezes one bounded snapshot. A later failed wait begins
+    # a new evaluation so fresh terminal evidence cannot be skipped.
+    decision="$(capture_epoch_decision \
+      "${stage}" "${epoch_container_id}" "${epoch_started_at}" \
+      "${old_container_id}" "${replacement_identity}")"
+    case "${decision}" in
+      terminal)
+        echo "Terminal authentication event detected in the current recovery epoch; refusing extension." >&2
+        return 1
+        ;;
+      epoch_changed)
+        echo "Container identity/StartedAt changed; discarding snapshot for a new epoch assessment." >&2
+        return 2
+        ;;
+      invalid|none)
+        echo "No safe progress evidence in the current immutable recovery snapshot; refusing extension." >&2
+        return 1
+        ;;
+      progress)
+        ;;
+    esac
+
     extension=$((extension + 1))
     echo "Immutable recovery snapshot shows login/config progress after ${stage} wait;" \
       "extending readiness wait (${extension}/${progress_extensions}) by ${progress_wait_seconds}s." >&2
@@ -146,6 +194,36 @@ wait_for_ready_with_progress() {
   return 1
 }
 
+run_stage_assessment() {
+  local timeout_seconds="$1"
+  local stage="$2"
+  local old_container_id="$3"
+  local replacement_identity="$4"
+  local epoch_reassessments=0 result
+
+  while [ "${epoch_reassessments}" -lt 2 ]; do
+    if ! inspect_epoch_identity "${container_name}"; then
+      echo "Unable to establish a valid ${stage} container identity/StartedAt." >&2
+      return 1
+    fi
+    ensure_2fa_bot_running "${epoch_container_id}"
+    if wait_for_ready_with_progress \
+      "${timeout_seconds}" "${stage}" "${epoch_container_id}" "${epoch_started_at}" \
+      "${old_container_id}" "${replacement_identity}"; then
+      return 0
+    else
+      result=$?
+    fi
+    if [ "${result}" -ne 2 ]; then
+      return "${result}"
+    fi
+    epoch_reassessments=$((epoch_reassessments + 1))
+  done
+
+  echo "Container identity kept changing; refusing additional epoch assessments." >&2
+  return 1
+}
+
 ensure_2fa_bot_running() {
   local epoch_container_id="$1"
   CONTAINER_NAME="${epoch_container_id}" bash "${script_dir}/ensure_2fa_bot_running.sh"
@@ -153,28 +231,14 @@ ensure_2fa_bot_running() {
 
 echo "Ensuring ${container_name} is running before readiness check."
 docker compose up -d --no-build "${compose_service_name}"
-if ! inspect_epoch_identity "${container_name}"; then
-  echo "Unable to establish a valid initial container identity/StartedAt." >&2
-  exit 1
-fi
-ensure_2fa_bot_running "${epoch_container_id}"
-
-if wait_for_ready_with_progress \
-  "${initial_wait_seconds}" "initial" "${epoch_container_id}" "${epoch_started_at}" "" "false"; then
+if run_stage_assessment "${initial_wait_seconds}" "initial" "" "false"; then
   exit 0
 fi
 
 echo "IB gateway API was not ready; restarting ${container_name} and retrying." >&2
 docker compose ps >&2 || true
 docker compose restart "${compose_service_name}"
-if ! inspect_epoch_identity "${container_name}"; then
-  echo "Unable to establish a valid restart container identity/StartedAt." >&2
-  exit 1
-fi
-ensure_2fa_bot_running "${epoch_container_id}"
-
-if wait_for_ready_with_progress \
-  "${restart_wait_seconds}" "restart" "${epoch_container_id}" "${epoch_started_at}" "" "false"; then
+if run_stage_assessment "${restart_wait_seconds}" "restart" "" "false"; then
   exit 0
 fi
 
@@ -189,11 +253,8 @@ if ! inspect_epoch_identity "${container_name}" \
   echo "Unable to establish a distinct replacement container identity/StartedAt." >&2
   exit 1
 fi
-ensure_2fa_bot_running "${epoch_container_id}"
 
-if wait_for_ready_with_progress \
-  "${recreate_wait_seconds}" "recreate" "${epoch_container_id}" "${epoch_started_at}" \
-  "${old_container_id}" "true"; then
+if run_stage_assessment "${recreate_wait_seconds}" "recreate" "${old_container_id}" "true"; then
   exit 0
 fi
 

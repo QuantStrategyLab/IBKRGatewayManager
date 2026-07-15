@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import unittest
 import sys
 from io import StringIO
@@ -68,6 +69,14 @@ class GatewayRecoveryClassifierTests(unittest.TestCase):
         )
         self.assertEqual(decision, classifier.Decision.PROGRESS)
 
+    def test_python_310_compatible_import_surface(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "scripts/gateway_recovery_classifier.py").read_text(
+            encoding="utf-8"
+        )
+        ast.parse(source, feature_version=(3, 10))
+        self.assertNotIn("StrEnum", source)
+        self.assertEqual(classifier.Decision.PROGRESS.value, "progress")
+
     def test_untimestamped_is_ignored_but_malformed_fails_closed(self) -> None:
         self.assertEqual(
             self.classify([event("docker", "new-container", "Server disconnected")]),
@@ -80,12 +89,16 @@ class GatewayRecoveryClassifierTests(unittest.TestCase):
 
     def test_terminal_is_sticky_after_later_progress(self) -> None:
         machine = classifier.RecoveryEpochMachine(EPOCH)
+        first_progress_snapshot = classifier.freeze_snapshot(
+            [event("docker", "new-container", "2026-07-15T16:38:21.974Z IBC: Login attempt")]
+        )
         terminal_snapshot = classifier.freeze_snapshot(
             [event("docker", "new-container", "2026-07-15T16:38:22Z IBC closing because login has not completed")]
         )
         progress_snapshot = classifier.freeze_snapshot(
             [event("docker", "new-container", "2026-07-15T16:38:23Z IBC: Login attempt")]
         )
+        self.assertEqual(machine.classify(first_progress_snapshot), classifier.Decision.PROGRESS)
         self.assertEqual(machine.classify(terminal_snapshot), classifier.Decision.TERMINAL)
         self.assertEqual(machine.classify(progress_snapshot), classifier.Decision.TERMINAL)
 
@@ -97,6 +110,38 @@ class GatewayRecoveryClassifierTests(unittest.TestCase):
             ]
         )
         self.assertEqual(decision, classifier.Decision.TERMINAL)
+
+    def test_initial_recency_window_ignores_stale_progress(self) -> None:
+        epoch = classifier.Epoch(
+            container_id="long-lived-container",
+            started_at="2026-07-10T00:00:00.000000000Z",
+            event_not_before="2026-07-15T16:38:00.000000000Z",
+        )
+        snapshot = classifier.freeze_snapshot(
+            [
+                event("file", "long-lived-container", "2026-07-14 16:38:22 IBC: Login attempt"),
+                event("file", "long-lived-container", "2026-07-15 16:38:01 IBC: Login attempt"),
+            ]
+        )
+        self.assertEqual(classifier.RecoveryEpochMachine(epoch).classify(snapshot), classifier.Decision.PROGRESS)
+
+        stale_only = classifier.freeze_snapshot(
+            [event("file", "long-lived-container", "2026-07-14 16:38:22 IBC: Login attempt")]
+        )
+        self.assertEqual(classifier.RecoveryEpochMachine(epoch).classify(stale_only), classifier.Decision.NONE)
+
+    def test_dismissal_requires_current_epoch_auth_progress(self) -> None:
+        dialog_only = self.classify(
+            [event("docker", "new-container", "2026-07-15T16:38:22Z Dismissing post-login dialog")]
+        )
+        contextual = self.classify(
+            [
+                event("docker", "new-container", "2026-07-15T16:38:22Z Dismissing post-login dialog"),
+                event("docker", "new-container", "2026-07-15T16:38:23Z Authentication completed"),
+            ]
+        )
+        self.assertEqual(dialog_only, classifier.Decision.NONE)
+        self.assertEqual(contextual, classifier.Decision.PROGRESS)
 
     def test_stable_readiness_succeeds_without_classifying_logs(self) -> None:
         machine = classifier.RecoveryEpochMachine(EPOCH)
@@ -147,7 +192,7 @@ class GatewayRecoveryClassifierTests(unittest.TestCase):
             classifier.parse_protocol_snapshot(protocol)
         with self.assertRaises(classifier.SnapshotError):
             classifier.parse_protocol_snapshot(
-                StringIO("D\tnew-container\t" + "x" * (classifier.MAX_LINE_BYTES + 1))
+                StringIO("F\tnew-container\t" + "x" * (classifier.MAX_LINE_BYTES + 1))
             )
 
     def test_source_failure_sentinel_is_sanitized_fail_closed(self) -> None:
