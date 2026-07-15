@@ -15,4 +15,8 @@ class T(unittest.TestCase):
  def test_constructors_revalidate(self):
   with self.assertRaises(EpochValueError): EpochIdentity('',0)
   with self.assertRaises(EpochValueError): EpochCursor(-1)
+  for bad in ('a/b','a\\b','a\n', ' ' * 129):
+   with self.subTest(bad=bad):
+    with self.assertRaises(EpochValueError): EpochIdentity(bad,0)
+  with self.assertRaises(EpochValueError): EpochCursor(253402300800000000000)
 if __name__=='__main__':unittest.main()
