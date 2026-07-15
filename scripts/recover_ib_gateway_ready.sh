@@ -14,6 +14,7 @@ recreate_wait_seconds="${IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS:-600}"
 progress_wait_seconds="${IB_GATEWAY_RECOVERY_PROGRESS_WAIT_SECONDS:-420}"
 progress_extensions="${IB_GATEWAY_RECOVERY_PROGRESS_EXTENSIONS:-2}"
 progress_window_seconds="${IB_GATEWAY_RECOVERY_PROGRESS_WINDOW_SECONDS:-420}"
+log_probe_timeout_seconds="${IB_GATEWAY_RECOVERY_LOG_PROBE_TIMEOUT_SECONDS:-10}"
 progress_regex="${IB_GATEWAY_RECOVERY_PROGRESS_REGEX:-IBC: (Starting Gateway|Login attempt|Second Factor Authentication|Login has completed|Configuration tasks completed|Found Gateway main window|Getting config dialog|Getting main window)|Authentication window found|Auto-fill submitted|Passed token authentication|Authentication completed|Security code:}"
 terminal_regex="${IB_GATEWAY_RECOVERY_TERMINAL_REGEX:-Connection reset by peer|Server disconnected|IBC: .*(Authentication|Login).*(timed out|timeout|failed)|IBC: .*(timed out|timeout).*(Authentication|Login)}"
 activity_classifier="${script_dir}/classify_ib_gateway_activity.awk"
@@ -44,7 +45,7 @@ wait_for_ready() {
 }
 
 gateway_recent_activity_from_docker_logs() {
-  docker logs --timestamps --since "${progress_window_seconds}s" "${container_name}" 2>&1 \
+  timeout "${log_probe_timeout_seconds}" docker logs --timestamps --since "${progress_window_seconds}s" "${container_name}" 2>&1 \
     | awk -v progress_regex="${progress_regex}" -v terminal_regex="${terminal_regex}" \
         -f "${activity_classifier}"
 }
@@ -57,7 +58,7 @@ gateway_recent_activity_from_file_logs() {
   cutoff_timestamp="$(date -u -d "@$((now - progress_window_seconds))" "+%Y-%m-%d %H:%M:%S")"
 
   for log_path in /home/ibgateway/Jts/launcher.log /home/ibgateway/2fa.log; do
-    { docker exec "${container_name}" tail -n 400 "${log_path}" 2>/dev/null || true; } \
+    { timeout "${log_probe_timeout_seconds}" docker exec "${container_name}" tail -n 400 "${log_path}" 2>/dev/null || true; } \
       | awk -v cutoff_timestamp="${cutoff_timestamp}" \
           -v progress_regex="${progress_regex}" -v terminal_regex="${terminal_regex}" \
           -f "${activity_classifier}"
