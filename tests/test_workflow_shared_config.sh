@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 workflow_file="$repo_dir/.github/workflows/main.yml"
+ci_workflow_file="$repo_dir/.github/workflows/ci.yml"
 maintenance_workflow_file="$repo_dir/.github/workflows/remote-maintenance.yml"
 diagnose_workflow_file="$repo_dir/.github/workflows/diagnose.yml"
 
@@ -15,6 +16,8 @@ grep -Fq 'providers/github-ibkr-gateway-main' "$workflow_file"
 grep -Fq 'ibkr-gateway-deploy@interactivebrokersquant.iam.gserviceaccount.com' "$workflow_file"
 grep -Fq 'id-token: write' "$workflow_file"
 grep -Fq 'timeout-minutes: 60' "$workflow_file"
+grep -Fq 'bash tests/test_gateway_recovery_scripts.sh' "$ci_workflow_file"
+grep -Fq 'bash tests/test_gateway_recovery_epoch_policy.sh' "$ci_workflow_file"
 grep -Fq 'sync_github_secrets_to_secret_manager:' "$workflow_file"
 grep -Fq 'deploy_mode:' "$workflow_file"
 grep -Fq 'workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}' "$workflow_file"
