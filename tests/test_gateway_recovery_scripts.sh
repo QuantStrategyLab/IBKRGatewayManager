@@ -55,12 +55,17 @@ newer_progress="$(printf '%s\n' \
   '2026-07-15 16:00:01 Server disconnected' \
   '2026-07-15 16:00:02 IBC: Login attempt' \
   | awk -v cutoff_timestamp='2026-07-15 16:00:00' -v progress_regex="$default_progress_regex" -v terminal_regex="$default_terminal_regex" -f "$activity_classifier")"
-test "$newer_progress" = $'2026-07-15 16:00:02\tprogress'
+test "$newer_progress" = $'2026-07-15 16:00:02.000000000\tprogress'
 newer_terminal="$(printf '%s\n' \
   '2026-07-15 16:00:01 IBC: Login attempt' \
   '2026-07-15 16:00:02 Server disconnected' \
   | awk -v cutoff_timestamp='2026-07-15 16:00:00' -v progress_regex="$default_progress_regex" -v terminal_regex="$default_terminal_regex" -f "$activity_classifier")"
-test "$newer_terminal" = $'2026-07-15 16:00:02\tterminal'
+test "$newer_terminal" = $'2026-07-15 16:00:02.000000000\tterminal'
+same_second_progress="$(printf '%s\n' \
+  '2026-07-15T16:00:02.100000000Z Server disconnected' \
+  '2026-07-15T16:00:02.200000000Z IBC: Login attempt' \
+  | awk -v cutoff_timestamp='2026-07-15 16:00:00' -v progress_regex="$default_progress_regex" -v terminal_regex="$default_terminal_regex" -f "$activity_classifier")"
+test "$same_second_progress" = $'2026-07-15 16:00:02.200000000\tprogress'
 untimestamped_terminal="$(printf '%s\n' \
   '2026-07-15 15:59:59 IBC: Login attempt' \
   'Server disconnected' \
