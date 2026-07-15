@@ -19,7 +19,7 @@ jobs:
       - name: Run shell tests
         run: |
           set -euo pipefail
-          bash tests/test_install_2fa_bot_watcher.sh
-          bash tests/test_wait_for_ib_gateway_ready.sh
-          bash tests/test_workflow_shared_config.sh
-          bash tests/test_docker_compose_ports.sh
+          for test_file in tests/*.sh; do
+            echo "== ${test_file} =="
+            bash "${test_file}"
+          done

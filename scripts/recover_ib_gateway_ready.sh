@@ -9,129 +9,99 @@ gateway_mode="${1:-${IB_GATEWAY_MODE:-paper}}"
 initial_wait_seconds="${IB_GATEWAY_RECOVERY_INITIAL_WAIT_SECONDS:-240}"
 restart_wait_seconds="${IB_GATEWAY_RECOVERY_RESTART_WAIT_SECONDS:-300}"
 recreate_wait_seconds="${IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS:-600}"
-# IBC can spend several minutes in first-run login/config flows and then
-# restart itself before the API socket listens. Do not interrupt that progress.
 progress_wait_seconds="${IB_GATEWAY_RECOVERY_PROGRESS_WAIT_SECONDS:-420}"
 progress_extensions="${IB_GATEWAY_RECOVERY_PROGRESS_EXTENSIONS:-2}"
-progress_window_seconds="${IB_GATEWAY_RECOVERY_PROGRESS_WINDOW_SECONDS:-420}"
-progress_regex="${IB_GATEWAY_RECOVERY_PROGRESS_REGEX:-IBC: (Starting Gateway|Login attempt|Second Factor Authentication|Login has completed|Configuration tasks completed|Found Gateway main window|Getting config dialog|Getting main window)|Authentication window found|Auto-fill submitted|Dismissing post-login dialog|Passed token authentication|Authentication completed|Security code:}"
+initial_snapshot_window_seconds="${IB_GATEWAY_RECOVERY_INITIAL_SNAPSHOT_WINDOW_SECONDS:-420}"
 lock_file="${IB_GATEWAY_RECOVERY_LOCK_FILE:-/var/lock/ib_gateway_recovery.lock}"
 lock_wait_seconds="${IB_GATEWAY_RECOVERY_LOCK_WAIT_SECONDS:-900}"
 
 cd "${repo_dir}"
-
 mkdir -p "$(dirname "${lock_file}")" 2>/dev/null || true
 exec 9>"${lock_file}"
-if [ "${lock_wait_seconds}" = "0" ]; then
-  if ! flock -n 9; then
-    echo "Another IB gateway recovery is already running; skipping this check."
-    exit 0
-  fi
-elif ! flock -w "${lock_wait_seconds}" 9; then
-  echo "Timed out waiting for IB gateway recovery lock: ${lock_file}" >&2
-  exit 1
-fi
+if [ "${lock_wait_seconds}" = 0 ]; then flock -n 9 || exit 0; else flock -w "${lock_wait_seconds}" 9; fi
 
-echo "Acquired IB gateway recovery lock: ${lock_file}"
-
-wait_for_ready() {
-  local timeout_seconds="$1"
-  IB_GATEWAY_CONTAINER_NAME="${container_name}" \
-  IB_GATEWAY_READY_TIMEOUT_SECONDS="${timeout_seconds}" \
-    bash "${script_dir}/wait_for_ib_gateway_ready.sh" "${gateway_mode}"
+inspect_epoch() {
+  local identity
+  identity="$(docker inspect --format '{{.Id}} {{.State.StartedAt}}' "${container_name}" 2>/dev/null)" || return 1
+  read -r epoch_id epoch_started_at <<<"${identity}"
+  [ -n "${epoch_id}" ] && [[ "${epoch_started_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$ ]]
 }
 
-gateway_recently_progressing_from_docker_logs() {
-  docker logs --since "${progress_window_seconds}s" "${container_name}" 2>&1 \
-    | grep -Eiq "${progress_regex}"
+assessment_lower_bound() {
+  local stage="$1"
+  python3 - "${stage}" "${epoch_started_at}" "${initial_snapshot_window_seconds}" <<'PY'
+import sys
+from datetime import datetime, timedelta, timezone
+stage, started_at, window = sys.argv[1:]
+start = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+if stage == "initial":
+    lower = max(start, datetime.now(timezone.utc) - timedelta(seconds=int(window)))
+else:
+    lower = start
+print(lower.isoformat(timespec="microseconds").replace("+00:00", "Z"))
+PY
 }
 
-gateway_recently_progressing_from_file_logs() {
-  docker exec "${container_name}" sh -s -- "${progress_window_seconds}" "${progress_regex}" <<'SH'
-set -eu
-
-progress_window_seconds="$1"
-progress_regex="$2"
-now="$(date +%s)"
-cutoff_timestamp="$(date -u -d "@$((now - progress_window_seconds))" "+%Y-%m-%d %H:%M:%S")"
-
-for log_path in /home/ibgateway/Jts/launcher.log /home/ibgateway/2fa.log; do
-  if [ ! -f "${log_path}" ]; then
-    continue
+snapshot_decision() {
+  local stage="$1" expected_id="$2" expected_started_at="$3" lower decision
+  if ! inspect_epoch || [ "${epoch_id}" != "${expected_id}" ] || [ "${epoch_started_at}" != "${expected_started_at}" ]; then
+    echo epoch_changed; return 0
   fi
-
-  log_mtime="$(stat -c %Y "${log_path}" 2>/dev/null || echo 0)"
-  if [ $((now - log_mtime)) -le "${progress_window_seconds}" ]; then
-    tail -n 400 "${log_path}" 2>/dev/null \
-      | awk -v cutoff_timestamp="${cutoff_timestamp}" -v progress_regex="${progress_regex}" '
-          substr($0, 1, 19) >= cutoff_timestamp && $0 ~ progress_regex { found = 1 }
-          END { exit found ? 0 : 1 }
-        ' && exit 0
-  fi
-done
-
-exit 1
-SH
+  lower="$(assessment_lower_bound "${stage}")" || { echo invalid; return 0; }
+  decision="$({
+    docker logs --timestamps --since "${lower}" "${expected_id}" 2>&1 | sed 's/^/D\t/' || printf 'X\n'
+    docker exec "${expected_id}" sh -c '
+      for p in /home/ibgateway/Jts/launcher.log /home/ibgateway/2fa.log; do
+        [ ! -e "$p" ] || [ -f "$p" ] || exit 42
+        [ ! -f "$p" ] || tail -n 400 "$p"
+      done
+    ' | sed 's/^/F\t/' || printf 'X\n'
+  } | python3 -c '
+import re, sys
+from datetime import datetime, timezone
+lower = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+terminal = re.compile(r"IBC closing because login has not completed|(?:authentication|login).*(?:timeout|timed out|failed)", re.I)
+progress = re.compile(r"IBC: (Starting Gateway|Login attempt|Second Factor Authentication|Login has completed|Configuration tasks completed)|Authentication window found|Auto-fill submitted|Passed token authentication|Authentication completed|Security code:", re.I)
+seen_progress = False
+for raw in sys.stdin:
+    if raw == "X\n": print("invalid"); raise SystemExit
+    try: _, line = raw.split("\t", 1)
+    except ValueError: print("invalid"); raise SystemExit
+    m = re.match(r"(\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d)(?:[.,:](\d{1,9}))?Z?", line)
+    if not m: continue
+    stamp = datetime.fromisoformat((m.group(1).replace(" ", "T") + "." + (m.group(2) or "0") + "+00:00"))
+    if stamp < lower: continue
+    if terminal.search(line): print("terminal"); raise SystemExit
+    if progress.search(line): seen_progress = True
+print("progress" if seen_progress else "none")
+' "${lower}"
+)" || decision=invalid
+  if ! inspect_epoch || [ "${epoch_id}" != "${expected_id}" ] || [ "${epoch_started_at}" != "${expected_started_at}" ]; then echo epoch_changed; else echo "${decision}"; fi
 }
 
-gateway_recently_progressing() {
-  gateway_recently_progressing_from_docker_logs || gateway_recently_progressing_from_file_logs
-}
-
-wait_for_ready_with_progress() {
-  local timeout_seconds="$1"
-  local stage="$2"
-  local extension=0
-
-  if wait_for_ready "${timeout_seconds}"; then
-    return 0
-  fi
-
-  while [ "${extension}" -lt "${progress_extensions}" ]; do
-    if ! gateway_recently_progressing; then
-      return 1
-    fi
-
-    extension=$((extension + 1))
-    echo "Recent IB gateway login/config progress detected after ${stage} wait; extending readiness wait (${extension}/${progress_extensions}) by ${progress_wait_seconds}s before external recovery." >&2
-    if wait_for_ready "${progress_wait_seconds}"; then
-      return 0
-    fi
+wait_ready() { IB_GATEWAY_CONTAINER_NAME="$2" IB_GATEWAY_READY_TIMEOUT_SECONDS="$1" bash "${script_dir}/wait_for_ib_gateway_ready.sh" "${gateway_mode}"; }
+assess_stage() {
+  local timeout="$1" stage="$2" reassessments=0 extension decision
+  while [ "$reassessments" -lt 2 ]; do
+    inspect_epoch || return 1
+    local assessed_id="$epoch_id" assessed_started="$epoch_started_at"
+    CONTAINER_NAME="$assessed_id" bash "${script_dir}/ensure_2fa_bot_running.sh"
+    wait_ready "$timeout" "$assessed_id" && return 0
+    extension=0
+    while [ "$extension" -lt "$progress_extensions" ]; do
+      decision="$(snapshot_decision "$stage" "$assessed_id" "$assessed_started")"
+      case "$decision" in terminal|invalid|none) return 1;; epoch_changed) reassessments=$((reassessments+1)); continue 2;; progress) ;; esac
+      extension=$((extension+1)); wait_ready "$progress_wait_seconds" "$assessed_id" && return 0
+    done
+    return 1
   done
-
   return 1
 }
 
-ensure_2fa_bot_running() {
-  CONTAINER_NAME="${container_name}" bash "${script_dir}/ensure_2fa_bot_running.sh"
-}
-
-echo "Ensuring ${container_name} is running before readiness check."
 docker compose up -d --no-build "${compose_service_name}"
-ensure_2fa_bot_running
-
-if wait_for_ready_with_progress "${initial_wait_seconds}" "initial"; then
-  exit 0
-fi
-
-echo "IB gateway API was not ready; restarting ${container_name} and retrying." >&2
-docker compose ps >&2 || true
+assess_stage "$initial_wait_seconds" initial && exit 0
 docker compose restart "${compose_service_name}"
-ensure_2fa_bot_running
-
-if wait_for_ready_with_progress "${restart_wait_seconds}" "restart"; then
-  exit 0
-fi
-
-echo "IB gateway API is still not ready; recreating ${container_name} and retrying." >&2
+assess_stage "$restart_wait_seconds" restart && exit 0
 docker compose up -d --force-recreate --no-build "${compose_service_name}"
-ensure_2fa_bot_running
-
-if wait_for_ready_with_progress "${recreate_wait_seconds}" "recreate"; then
-  exit 0
-fi
-
-echo "IB gateway API did not recover after restart/recreate." >&2
-docker compose ps >&2 || true
-docker logs --tail 160 "${container_name}" >&2 || true
+assess_stage "$recreate_wait_seconds" recreate && exit 0
 exit 1
