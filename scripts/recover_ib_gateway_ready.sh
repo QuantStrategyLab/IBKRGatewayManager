@@ -14,7 +14,8 @@ recreate_wait_seconds="${IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS:-600}"
 progress_wait_seconds="${IB_GATEWAY_RECOVERY_PROGRESS_WAIT_SECONDS:-420}"
 progress_extensions="${IB_GATEWAY_RECOVERY_PROGRESS_EXTENSIONS:-2}"
 progress_window_seconds="${IB_GATEWAY_RECOVERY_PROGRESS_WINDOW_SECONDS:-420}"
-progress_regex="${IB_GATEWAY_RECOVERY_PROGRESS_REGEX:-IBC: (Starting Gateway|Login attempt|Second Factor Authentication|Login has completed|Configuration tasks completed|Found Gateway main window|Getting config dialog|Getting main window)|Authentication window found|Auto-fill submitted|Dismissing post-login dialog|Passed token authentication|Authentication completed|Security code:}"
+progress_regex="${IB_GATEWAY_RECOVERY_PROGRESS_REGEX:-IBC: (Starting Gateway|Login attempt|Second Factor Authentication|Login has completed|Configuration tasks completed|Found Gateway main window|Getting config dialog|Getting main window)|Authentication window found|Auto-fill submitted|Passed token authentication|Authentication completed|Security code:}"
+terminal_regex="${IB_GATEWAY_RECOVERY_TERMINAL_REGEX:-Connection reset by peer|Server disconnected|IBC: .*(Authentication|Login).*(timed out|timeout|failed)|IBC: .*(timed out|timeout).*(Authentication|Login)}"
 lock_file="${IB_GATEWAY_RECOVERY_LOCK_FILE:-/var/lock/ib_gateway_recovery.lock}"
 lock_wait_seconds="${IB_GATEWAY_RECOVERY_LOCK_WAIT_SECONDS:-900}"
 
@@ -78,6 +79,43 @@ gateway_recently_progressing() {
   gateway_recently_progressing_from_docker_logs || gateway_recently_progressing_from_file_logs
 }
 
+gateway_recently_terminal_from_docker_logs() {
+  docker logs --since "${progress_window_seconds}s" "${container_name}" 2>&1 \
+    | grep -Eiq "${terminal_regex}"
+}
+
+gateway_recently_terminal_from_file_logs() {
+  docker exec "${container_name}" sh -s -- "${progress_window_seconds}" "${terminal_regex}" <<'SH'
+set -eu
+
+progress_window_seconds="$1"
+terminal_regex="$2"
+now="$(date +%s)"
+cutoff_timestamp="$(date -u -d "@$((now - progress_window_seconds))" "+%Y-%m-%d %H:%M:%S")"
+
+for log_path in /home/ibgateway/Jts/launcher.log /home/ibgateway/2fa.log; do
+  if [ ! -f "${log_path}" ]; then
+    continue
+  fi
+
+  log_mtime="$(stat -c %Y "${log_path}" 2>/dev/null || echo 0)"
+  if [ $((now - log_mtime)) -le "${progress_window_seconds}" ]; then
+    tail -n 400 "${log_path}" 2>/dev/null \
+      | awk -v cutoff_timestamp="${cutoff_timestamp}" -v terminal_regex="${terminal_regex}" '
+          substr($0, 1, 19) >= cutoff_timestamp && $0 ~ terminal_regex { found = 1 }
+          END { exit found ? 0 : 1 }
+        ' && exit 0
+  fi
+done
+
+exit 1
+SH
+}
+
+gateway_recently_terminal() {
+  gateway_recently_terminal_from_docker_logs || gateway_recently_terminal_from_file_logs
+}
+
 wait_for_ready_with_progress() {
   local timeout_seconds="$1"
   local stage="$2"
@@ -88,6 +126,11 @@ wait_for_ready_with_progress() {
   fi
 
   while [ "${extension}" -lt "${progress_extensions}" ]; do
+    if gateway_recently_terminal; then
+      echo "Recent terminal IB gateway authentication failure detected after ${stage} wait; skipping progress extension." >&2
+      return 1
+    fi
+
     if ! gateway_recently_progressing; then
       return 1
     fi

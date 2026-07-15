@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 recover_script="$repo_dir/scripts/recover_ib_gateway_ready.sh"
+twofa_bot="$repo_dir/2fa_bot.py"
 swap_script="$repo_dir/scripts/ensure_host_swap.sh"
 daily_restart_script="$repo_dir/scripts/restart_ib_gateway_daily.sh"
 health_watcher_script="$repo_dir/scripts/install_gateway_health_watcher.sh"
@@ -27,6 +28,26 @@ grep -Fq 'IB_GATEWAY_RECOVERY_PROGRESS_EXTENSIONS:-2' "$recover_script"
 grep -Fq 'IB_GATEWAY_RECOVERY_PROGRESS_WINDOW_SECONDS:-420' "$recover_script"
 grep -Fq 'Passed token authentication' "$recover_script"
 grep -Fq 'Authentication completed' "$recover_script"
+grep -Fq 'Connection reset by peer' "$recover_script"
+grep -Fq 'Server disconnected' "$recover_script"
+grep -Fq 'gateway_recently_terminal()' "$recover_script"
+grep -Fq 'Recent terminal IB gateway authentication failure detected' "$recover_script"
+if grep -Fq 'Dismissing post-login dialog' "$recover_script" "$twofa_bot"; then
+  echo 'Ambiguous dismiss-dialog text must not be treated as recovery progress' >&2
+  exit 1
+fi
+grep -Fq 'Dismissing gateway dialog candidate' "$twofa_bot"
+default_progress_regex="$(sed -n 's/^progress_regex="${IB_GATEWAY_RECOVERY_PROGRESS_REGEX:-\(.*\)}"$/\1/p' "$recover_script")"
+default_terminal_regex="$(sed -n 's/^terminal_regex="${IB_GATEWAY_RECOVERY_TERMINAL_REGEX:-\(.*\)}"$/\1/p' "$recover_script")"
+test -n "$default_progress_regex"
+test -n "$default_terminal_regex"
+if printf '%s\n' 'Dismissing gateway dialog candidate' | grep -Eq "$default_progress_regex"; then
+  echo 'Gateway dialog dismissal must not match recovery progress' >&2
+  exit 1
+fi
+printf '%s\n' 'Connection reset by peer' | grep -Eq "$default_terminal_regex"
+printf '%s\n' 'Server disconnected' | grep -Eq "$default_terminal_regex"
+printf '%s\n' 'IBC: Login attempt timed out' | grep -Eq "$default_terminal_regex"
 grep -Fq 'gateway_recently_progressing()' "$recover_script"
 grep -Fq 'gateway_recently_progressing_from_docker_logs()' "$recover_script"
 grep -Fq 'gateway_recently_progressing_from_file_logs()' "$recover_script"
@@ -37,6 +58,11 @@ grep -Fq 'cutoff_timestamp="$(date -u -d "@$((now - progress_window_seconds))" "
 grep -Fq 'substr($0, 1, 19) >= cutoff_timestamp && $0 ~ progress_regex' "$recover_script"
 grep -Fq 'wait_for_ready_with_progress()' "$recover_script"
 grep -Fq 'Recent IB gateway login/config progress detected' "$recover_script"
+terminal_check_line="$(grep -n 'if gateway_recently_terminal; then' "$recover_script" | head -n 1 | cut -d: -f1)"
+progress_check_line="$(grep -n 'if ! gateway_recently_progressing; then' "$recover_script" | head -n 1 | cut -d: -f1)"
+test -n "$terminal_check_line"
+test -n "$progress_check_line"
+test "$terminal_check_line" -lt "$progress_check_line"
 grep -Fq 'IB_GATEWAY_RECOVERY_LOCK_FILE:-/var/lock/ib_gateway_recovery.lock' "$recover_script"
 grep -Fq 'IB_GATEWAY_RECOVERY_LOCK_WAIT_SECONDS:-900' "$recover_script"
 grep -Fq 'flock -n 9' "$recover_script"

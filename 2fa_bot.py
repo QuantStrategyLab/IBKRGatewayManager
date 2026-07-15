@@ -290,7 +290,7 @@ def find_dismissible_dialogs():
 def dismiss_dialog(candidate):
     if candidate.window_id not in dismissed_dialog_windows:
         log.info(
-            "Dismissing post-login dialog (id=%s, title=%r, size=%sx%s)",
+            "Dismissing gateway dialog candidate (id=%s, title=%r, size=%sx%s)",
             candidate.window_id,
             candidate.title,
             candidate.width or "?",
