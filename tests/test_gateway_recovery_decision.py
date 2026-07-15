@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.gateway_recovery_decision import Decision, Epoch, Event, decide
 E=Epoch('c','2026-07-15T16:00:00.123456789Z','2026-07-15T16:00:00.123456789Z')
-def e(text, cid='c'): return Event(cid,text)
+def e(text, cid='c', started_at=E.started_at): return Event(cid,started_at,text)
 class Contract(unittest.TestCase):
  def test_precedence_permutations(self):
   terminal=e('2026-07-15T16:00:02Z IBC closing because login has not completed'); ready=e('2026-07-15T16:00:01Z READY'); progress=e('2026-07-15T16:00:01Z IBC: Login attempt')
@@ -19,4 +19,8 @@ class Contract(unittest.TestCase):
   drift=Epoch('c','2026-07-15T16:01:00.000000000Z','2026-07-15T16:01:00.000000000Z'); self.assertEqual(decide(E,[],current_epoch=drift,prior_sticky=True).decision,Decision.EPOCH_CHANGED)
  def test_filters(self):
   self.assertEqual(decide(E,[e('2026-07-15T16:00:00.123456788Z IBC: Login attempt'),e('2026-07-15T16:00:01Z IBC: Login attempt','old')]).decision,Decision.NONE)
+ def test_mixed_or_unprovable_event_identity_is_rejected(self):
+  mixed=[e('2026-07-15T16:00:01Z IBC closing because login has not completed'), e('2026-07-15T16:00:01Z READY',started_at='2026-07-15T16:01:00.000000000Z')]
+  self.assertEqual(decide(E,mixed).decision,Decision.NONE)
+  self.assertEqual(decide(E,[Event('c','', '2026-07-15T16:00:01Z IBC: Login attempt')]).decision,Decision.NONE)
 if __name__=='__main__': unittest.main()

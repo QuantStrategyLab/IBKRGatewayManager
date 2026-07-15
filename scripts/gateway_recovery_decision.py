@@ -9,7 +9,7 @@ class Decision(str, Enum): TERMINAL='terminal'; READY='ready'; PROGRESS='progres
 @dataclass(frozen=True)
 class Epoch: container_id:str; started_at:str; lower_bound:str
 @dataclass(frozen=True)
-class Event: container_id:str; line:str
+class Event: container_id:str; started_at:str; line:str
 @dataclass(frozen=True)
 class Result: decision:Decision; sticky_terminal:bool
 STAMP=re.compile(r'^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z\s+(.*)$')
@@ -22,9 +22,11 @@ def key(value:str):
 def decide(epoch:Epoch, events:Iterable[Event], *, stable_ready:bool=False, prior_sticky:bool=False, current_epoch:Epoch|None=None)->Result:
  if current_epoch and (current_epoch.container_id!=epoch.container_id or current_epoch.started_at!=epoch.started_at): return Result(Decision.EPOCH_CHANGED,False)
  if prior_sticky:return Result(Decision.TERMINAL,True)
+ events=tuple(events)
+ if any(item.container_id!=epoch.container_id or item.started_at!=epoch.started_at for item in events): return Result(Decision.NONE,False)
  lower=key(epoch.lower_bound); ready=stable_ready; progress=False; terminal=False
  for item in events:
-  if item.container_id!=epoch.container_id:continue
+  if item.container_id!=epoch.container_id or item.started_at!=epoch.started_at:continue
   match=STAMP.match(item.line)
   if not match:continue
   stamp=(datetime.fromisoformat(match.group(1)).replace(tzinfo=timezone.utc),int(((match.group(2)or'')+'0'*9)[:9]))
