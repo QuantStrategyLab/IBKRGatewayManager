@@ -650,7 +650,12 @@ jobs:
             echo "[\$(date -u +%FT%TZ)] Keepalive fallback: image \${compose_image} is missing, building only \${compose_service_name}"
             sudo docker compose build "\${compose_service_name}"
           fi
-          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_2fa_bot_watcher.sh
+          host_2fa_bot_sha256="\$(sha256sum ./2fa_bot.py | awk '{print \$1}')"
+          container_2fa_bot_sha256="\$(sudo timeout 15 docker exec "\${container_name}" sha256sum /home/ibgateway/2fa_bot.py 2>/dev/null | awk '{print \$1}' || true)"
+          if [ "\${container_2fa_bot_sha256}" != "\${host_2fa_bot_sha256}" ]; then
+            echo "[\$(date -u +%FT%TZ)] Refreshing stale 2FA bot bind mount for \${container_name}"
+            sudo docker compose up -d --force-recreate --no-build "\${compose_service_name}"
+          fi
           sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
           restore_gateway_watchers
           sudo docker compose ps
@@ -698,7 +703,6 @@ jobs:
           sudo docker compose down
           sudo docker compose up -d "\${compose_service_name}"
 
-          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_UNIT_SUFFIX="\${IB_GATEWAY_UNIT_SUFFIX:-}" bash ./scripts/install_2fa_bot_watcher.sh
           sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
           restore_gateway_watchers
           sudo docker compose ps
