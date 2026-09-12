@@ -278,12 +278,137 @@ grep -Fq 'name: Maintain gateway target' "$repo_dir/.github/workflows/remote-mai
 
 python3 - "$workflow_file" <<'PY'
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 
 workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
 assert 'emit_sanitized_remote_failure_stage()' in workflow
 assert "GATEWAY_DEPLOY_FAILURE_STAGE=REMOTE_COMMAND_OR_TRANSPORT_FAILED" in workflow
 assert "GATEWAY_RECOVERY_FAILURE_STAGE=GATEWAY_NOT_READY_AFTER_RECREATE" in workflow
+assert 'GATEWAY_REMOTE_FAILURE_STAGE=LOAD_RUNTIME_ENV' in workflow
+assert 'GATEWAY_REMOTE_FAILURE_STAGE=ARM_WATCHER_FAILSAFE' in workflow
+assert 'GATEWAY_REMOTE_FAILURE_STAGE=STOP_WATCHERS' in workflow
+assert 'GATEWAY_REMOTE_FAILURE_STAGE=ENSURE_HOST_SWAP' in workflow
+assert 'GATEWAY_REMOTE_FAILURE_STAGE=CHECK_RUNTIME_IMAGE' in workflow
+assert 'GATEWAY_REMOTE_FAILURE_STAGE=CHECK_2FA_BIND_MOUNT' in workflow
+assert 'GATEWAY_REMOTE_FAILURE_STAGE=REFRESH_2FA_BIND_MOUNT' in workflow
+assert 'GATEWAY_REMOTE_FAILURE_STAGE=RECOVER_GATEWAY' in workflow
+assert 'GATEWAY_REMOTE_FAILURE_STAGE=RESTORE_WATCHERS' in workflow
+assert 'GATEWAY_REMOTE_FAILURE_STAGE=REPORT_RUNTIME_STATUS' in workflow
 assert 'gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DEPLOY_COMMAND}" >"${command_log}" 2>&1' in workflow
 assert 'run_sanitized_remote_deploy' in workflow
+
+function_start = "          emit_sanitized_remote_failure_stage() {\n"
+function_end = "\n          }\n\n          run_sanitized_remote_deploy()"
+classifier = workflow.split(function_start, 1)[1].split(function_end, 1)[0]
+classifier = "emit_sanitized_remote_failure_stage() {\n" + "\n".join(
+    line.removeprefix("          ") for line in classifier.splitlines()
+) + "\n}"
+
+def classify(log_text: str) -> subprocess.CompletedProcess[str]:
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as command_log:
+        command_log.write(log_text)
+        command_log.flush()
+        script = "log_step() { printf '%s\\n' \"$1\"; }\n" + classifier + '\nemit_sanitized_remote_failure_stage "$1"\n'
+        return subprocess.run(
+            ["bash", "-c", script, "classifier", command_log.name],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+
+sensitive = "TOTP_SECRET=do-not-print account=U12345678"
+recovery = classify(f"{sensitive}\nGATEWAY_RECOVERY_FAILURE_STAGE=GATEWAY_UI_BLOCKER\n")
+assert recovery.stdout.strip() == "GATEWAY_RECOVERY_FAILURE_STAGE=GATEWAY_UI_BLOCKER"
+assert sensitive not in recovery.stdout
+
+remote = classify(f"{sensitive}\nGATEWAY_REMOTE_FAILURE_STAGE=ENSURE_HOST_SWAP\n")
+assert remote.stdout.strip() == "GATEWAY_REMOTE_FAILURE_STAGE=ENSURE_HOST_SWAP"
+assert sensitive not in remote.stdout
+
+unknown = classify(f"{sensitive}\nGATEWAY_REMOTE_FAILURE_STAGE=UNTRUSTED_STAGE\n")
+assert unknown.stdout.strip().endswith("GATEWAY_DEPLOY_FAILURE_STAGE=REMOTE_COMMAND_OR_TRANSPORT_FAILED")
+assert sensitive not in unknown.stdout
+
+transport = classify(f"{sensitive}\nssh: connect to host failed\n")
+assert transport.stdout.strip().endswith("GATEWAY_DEPLOY_FAILURE_STAGE=REMOTE_COMMAND_OR_TRANSPORT_FAILED")
+assert sensitive not in transport.stdout
+
+keepalive_start = '          if [ "${DEPLOY_MODE}" = "keepalive" ]; then\n'
+remote_start = "            REMOTE_DEPLOY_COMMAND=$(cat <<EOF\n"
+remote_end = "          cd '${DEPLOY_PATH}'\n"
+keepalive = workflow.split(keepalive_start, 1)[1]
+remote_prelude = keepalive.split(remote_start, 1)[1].split(remote_end, 1)[0]
+remote_prelude = "\n".join(
+    line.removeprefix("          ").replace(r"\${", "${").replace(r"\$?", "$?")
+    for line in remote_prelude.splitlines()
+)
+
+keepalive_remote = keepalive.split(remote_start, 1)[1].split("          EOF\n", 1)[0]
+trap_lines = [
+    line.removeprefix("          ").replace(r"\${", "${").replace(r"\$?", "$?")
+    for line in keepalive_remote.splitlines()
+    if line.removeprefix("          ").startswith("trap 'status=")
+]
+assert len(trap_lines) == 2
+
+with tempfile.NamedTemporaryFile(mode="r+", encoding="utf-8") as restore_log:
+    arm_failure = subprocess.run(
+        [
+            "bash",
+            "-c",
+            remote_prelude
+            + '\nrestore_log_path="$1"\nrestore_gateway_watchers() { printf restore >>"$restore_log_path"; }\n'
+            + 'remote_failure_stage="ARM_WATCHER_FAILSAFE"\nexit 19\n',
+            "arm-failure",
+            restore_log.name,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    restore_log.seek(0)
+    assert arm_failure.returncode == 19
+    assert restore_log.read() == ""
+    assert arm_failure.stderr.strip() == "GATEWAY_REMOTE_FAILURE_STAGE=ARM_WATCHER_FAILSAFE"
+
+with tempfile.NamedTemporaryFile(mode="r+", encoding="utf-8") as restore_log:
+    post_arm_failure = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -euo pipefail\n"
+            + 'remote_failure_stage="ENSURE_HOST_SWAP"\n'
+            + 'watchers_restored=false\n'
+            + 'restore_log_path="$1"\n'
+            + 'emit_remote_failure_stage() { printf "GATEWAY_REMOTE_FAILURE_STAGE=%s\\n" "$remote_failure_stage" >&2; }\n'
+            + 'restore_gateway_watchers() { printf restore >>"$restore_log_path"; }\n'
+            + trap_lines[1]
+            + "\nexit 23\n",
+            "post-arm-failure",
+            restore_log.name,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    restore_log.seek(0)
+    assert post_arm_failure.returncode == 23
+    assert restore_log.read() == "restore"
+    assert post_arm_failure.stderr.strip() == "GATEWAY_REMOTE_FAILURE_STAGE=ENSURE_HOST_SWAP"
+
+failed_pipe = subprocess.run(
+    ["bash", "-c", remote_prelude + '\nremote_failure_stage="CHECK_RUNTIME_IMAGE"\nprintf x | false\n'],
+    capture_output=True,
+    text=True,
+)
+assert failed_pipe.returncode != 0
+assert failed_pipe.stderr.strip() == "GATEWAY_REMOTE_FAILURE_STAGE=CHECK_RUNTIME_IMAGE"
+
+successful_remote = subprocess.run(
+    ["bash", "-c", remote_prelude + "\ntrue\n"],
+    capture_output=True,
+    text=True,
+)
+assert successful_remote.returncode == 0
+assert "GATEWAY_REMOTE_FAILURE_STAGE" not in successful_remote.stderr
 PY
