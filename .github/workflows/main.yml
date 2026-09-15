@@ -21,6 +21,7 @@ on:
         options:
           - keepalive
           - full
+          - restore-env
       approved_ref:
         description: Approved source ref for a full deployment; only refs/heads/main is accepted.
         required: false
@@ -109,9 +110,9 @@ jobs:
 
           selected_name = os.environ.get("SELECTED_TARGET", "") or "all"
           selected_deploy_mode = os.environ.get("SELECTED_DEPLOY_MODE", "") or "keepalive"
-          if selected_deploy_mode == "full" and selected_name == "all":
+          if selected_deploy_mode in {"full", "restore-env"} and selected_name == "all":
               raise SystemExit(
-                  "A full gateway deployment requires one explicit target; "
+                  "A full or restore-env gateway operation requires one explicit target; "
                   "use keepalive for all-target maintenance."
               )
           if selected_name == "all":
@@ -190,7 +191,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Verify full-deploy source provenance
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_mode == 'full' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_mode == 'full' || inputs.deploy_mode == 'restore-env') }}
         run: |
           set -euo pipefail
 
@@ -252,7 +253,7 @@ jobs:
           require_secret_source SSH_PRIVATE_KEY_SECRET_NAME SSH_PRIVATE_KEY SSH_PRIVATE_KEY
 
       - name: Check full-deploy credential config
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_mode == 'full' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_mode == 'full' || inputs.deploy_mode == 'restore-env') }}
         env:
           TWS_USERID: ${{ secrets.TWS_USERID }}
           TWS_PASSWORD: ${{ secrets.TWS_PASSWORD }}
@@ -277,9 +278,21 @@ jobs:
           require_secret_source TWS_USERID_SECRET_NAME TWS_USERID TWS_USERID
           require_secret_source TWS_PASSWORD_SECRET_NAME TWS_PASSWORD TWS_PASSWORD
           require_secret_source VNC_SERVER_PASSWORD_SECRET_NAME VNC_SERVER_PASSWORD VNC_SERVER_PASSWORD
+          if [ "${WORKFLOW_DISPATCH_MODE:-}" = "restore-env" ]; then
+            for required_secret_name in TWS_USERID_SECRET_NAME TWS_PASSWORD_SECRET_NAME VNC_SERVER_PASSWORD_SECRET_NAME; do
+              if [ -z "${!required_secret_name:-}" ]; then
+                echo "${required_secret_name} is required for restore-env; refusing cross-account fallback." >&2
+                exit 1
+              fi
+            done
+          fi
           twofa_autofill="$(printf '%s' "${IBKR_2FA_AUTOFILL:-}" | tr '[:upper:]' '[:lower:]')"
           if [ "${twofa_autofill}" = "yes" ] || [ "${twofa_autofill}" = "true" ] || [ "${twofa_autofill}" = "1" ]; then
             require_secret_source TOTP_SECRET_SECRET_NAME TOTP_SECRET TOTP_SECRET
+            if [ "${WORKFLOW_DISPATCH_MODE:-}" = "restore-env" ] && [ -z "${TOTP_SECRET_SECRET_NAME:-}" ]; then
+              echo "TOTP_SECRET_SECRET_NAME is required for restore-env; refusing cross-account fallback." >&2
+              exit 1
+            fi
           fi
 
       - name: Authenticate to Google Cloud
@@ -390,6 +403,10 @@ jobs:
             if [ -n "${secret_name:-}" ]; then
               gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "${secret_name}"
             else
+              if [ "${WORKFLOW_DISPATCH_MODE:-}" = "restore-env" ]; then
+                echo "restore-env requires target-specific Secret Manager names." >&2
+                return 1
+              fi
               printf '%s' "${fallback_value}"
             fi
           }
@@ -412,7 +429,7 @@ jobs:
           echo "SSH_KEY_FILE=$SSH_KEY_FILE" >> "$GITHUB_ENV"
 
       - name: Prepare full-deploy runtime environment
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_mode == 'full' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_mode == 'full' || inputs.deploy_mode == 'restore-env') }}
         env:
           TWS_USERID: ${{ secrets.TWS_USERID }}
           TWS_PASSWORD: ${{ secrets.TWS_PASSWORD }}
@@ -435,6 +452,11 @@ jobs:
           tws_userid="$(resolve_secret "${TWS_USERID_SECRET_NAME:-}" "${TWS_USERID:-}")"
           tws_password="$(resolve_secret "${TWS_PASSWORD_SECRET_NAME:-}" "${TWS_PASSWORD:-}")"
           totp_secret=""
+          if [ "${WORKFLOW_DISPATCH_MODE:-}" = "restore-env" ] && [ -z "${TOTP_SECRET_SECRET_NAME:-}" ] \
+            && [ -n "${TOTP_SECRET:-}" ]; then
+            echo "TOTP_SECRET_SECRET_NAME is required for restore-env; refusing global TOTP fallback." >&2
+            exit 1
+          fi
           if [ -n "${TOTP_SECRET_SECRET_NAME:-}" ] || [ -n "${TOTP_SECRET:-}" ]; then
             totp_secret="$(resolve_secret "${TOTP_SECRET_SECRET_NAME:-}" "${TOTP_SECRET:-}")"
           fi
@@ -505,13 +527,184 @@ jobs:
           def quote(value: str) -> str:
               return "'" + value.replace("'", "'\"'\"'") + "'"
 
+          if os.environ.get("WORKFLOW_DISPATCH_MODE") == "restore-env":
+              os.umask(0o077)
           with open(env_file, "w", encoding="utf-8") as fh:
               for key, value in values.items():
                   fh.write(f"{key}={quote(value)}\n")
+          os.chmod(env_file, 0o600)
           PY
+          if [ "${WORKFLOW_DISPATCH_MODE:-}" = "restore-env" ]; then
+            syntax_error_file="$RUNNER_TEMP/restore-env-bash-syntax.err"
+            if ! env -i bash -n "$ENV_FILE" 2>"$syntax_error_file"; then
+              echo "Generated restore-env file failed shell syntax validation." >&2
+              rm -f "$syntax_error_file"
+              exit 1
+            fi
+            rm -f "$syntax_error_file"
+          fi
           echo "ENV_FILE=$ENV_FILE" >> "$GITHUB_ENV"
 
+      - name: Restore missing gateway runtime environment
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_mode == 'restore-env' }}
+        run: |
+          set -euo pipefail
+          if [ "${WORKFLOW_DISPATCH_TARGET:-all}" = "all" ]; then
+            echo "restore-env requires one explicit target." >&2
+            exit 1
+          fi
+          REMOTE_TARGET="${GCE_USER}@${GCE_INSTANCE_NAME}"
+          REMOTE_COMMON_FLAGS=(--project "${GCP_PROJECT_ID}" --zone "${GCE_ZONE}" --quiet --tunnel-through-iap --ssh-key-file "${SSH_KEY_FILE}")
+          SSH_FLAGS=("${REMOTE_COMMON_FLAGS[@]}" --ssh-flag="-o ServerAliveInterval=30" --ssh-flag="-o ServerAliveCountMax=10" --ssh-flag="-o TCPKeepAlive=yes")
+          SCP_FLAGS=("${REMOTE_COMMON_FLAGS[@]}" --scp-flag="-o ServerAliveInterval=30" --scp-flag="-o ServerAliveCountMax=10" --scp-flag="-o TCPKeepAlive=yes")
+          remote_env="/tmp/ibkr-restore-${TARGET_NAME}-${GITHUB_RUN_ID}.env"
+          remote_command=$(cat <<EOF
+          set -euo pipefail
+          candidate='${remote_env}'
+          destination='${DEPLOY_PATH}/.env'
+          container='${IB_GATEWAY_CONTAINER_NAME}'
+          service='${IB_GATEWAY_COMPOSE_SERVICE_NAME}'
+          project='${IB_GATEWAY_COMPOSE_PROJECT_NAME}'
+          cd '${DEPLOY_PATH}'
+          if [ -e "\${destination}" ] || [ -L "\${destination}" ]; then
+            echo 'GATEWAY_RESTORE_FAILURE_STAGE=RUNTIME_ENV_ALREADY_EXISTS' >&2
+            exit 1
+          fi
+          inspect_file="\$(mktemp)"
+          compose_file="\$(mktemp)"
+          cleanup() { rm -f "\${inspect_file}" "\${compose_file}" "\${candidate}"; }
+          trap cleanup EXIT
+          if ! sudo docker inspect "\${container}" >"\${inspect_file}" 2>/dev/null; then
+            echo 'GATEWAY_RESTORE_FAILURE_STAGE=RUNNING_CONTAINER_NOT_FOUND' >&2
+            exit 1
+          fi
+          if ! sudo docker inspect --format '{{json .State.Running}}' "\${container}" | grep -Fxq true; then
+            echo 'GATEWAY_RESTORE_FAILURE_STAGE=CONTAINER_NOT_READY' >&2
+            exit 1
+          fi
+          if ! sudo docker compose --project-name "\${project}" --env-file "\${candidate}" config --format json >"\${compose_file}" 2>/dev/null; then
+            echo 'GATEWAY_RESTORE_FAILURE_STAGE=COMPOSE_CONFIG_FAILED' >&2
+            exit 1
+          fi
+          if ! python3 - "\${inspect_file}" "\${compose_file}" "\${container}" "\${service}" "\${project}" '${DEPLOY_PATH}' <<'PY'
+          import json
+          import sys
+
+          inspect = json.load(open(sys.argv[1], encoding="utf-8"))[0]
+          compose = json.load(open(sys.argv[2], encoding="utf-8"))
+          container, service, project, deploy_path = sys.argv[3:]
+          labels = inspect.get("Config", {}).get("Labels") or {}
+          running_env = {}
+          for item in inspect.get("Config", {}).get("Env") or []:
+              if "=" in item:
+                  key, value = item.split("=", 1)
+                  running_env[key] = value
+          spec = (compose.get("services") or {}).get(service)
+          identity_checks = {
+              "container_name": inspect.get("Name") == "/" + container,
+              "compose_project": labels.get("com.docker.compose.project") == project,
+              "compose_service": labels.get("com.docker.compose.service") == service,
+              "compose_working_dir": labels.get("com.docker.compose.project.working_dir") == deploy_path,
+          }
+          identity = all(identity_checks.values())
+          expected = spec.get("environment") if isinstance(spec, dict) else None
+          if isinstance(expected, dict):
+              expected_env = {key: str(value) for key, value in expected.items() if value is not None}
+          elif isinstance(expected, list):
+              expected_env = {item.split("=", 1)[0]: item.split("=", 1)[1] for item in expected if "=" in item}
+          else:
+              expected_env = {}
+          security_checks = {
+              key: running_env.get(key) == value for key, value in expected_env.items()
+          }
+          security = bool(expected_env) and all(security_checks.values())
+          working_dir = (spec or {}).get("working_dir") if isinstance(spec, dict) else None
+          if working_dir:
+              security_checks["working_dir"] = inspect.get("Config", {}).get("WorkingDir") == working_dir
+              security = security and security_checks["working_dir"]
+          running_ports = inspect.get("NetworkSettings", {}).get("Ports") or {}
+          for port in (spec or {}).get("ports", []):
+              if not isinstance(port, dict):
+                  security = False
+                  security_checks["ports"] = False
+                  continue
+              key = f"{port.get('target')}/{port.get('protocol', 'tcp')}"
+              bindings = running_ports.get(key)
+              published = str(port.get("published", ""))
+              host_ip = str(port.get("host_ip") or "")
+              expected_host_ips = {host_ip} if host_ip else {"0.0.0.0", "::"}
+              if not bindings or published and not any(
+                  item.get("HostPort") == published
+                  and item.get("HostIp", "") in expected_host_ips
+                  for item in bindings
+              ):
+                  security = False
+                  security_checks["ports"] = False
+          mismatches = [key for key, matched in identity_checks.items() if not matched]
+          mismatches.extend(key for key, matched in security_checks.items() if not matched)
+          print(
+              f"container_identity_match={'true' if identity else 'false'} "
+              f"security_config_match={'true' if security else 'false'} "
+              f"mismatch_fields={','.join(sorted(set(mismatches))) or 'none'}"
+          )
+          raise SystemExit(0 if identity and security else 1)
+          PY
+          then
+            echo 'GATEWAY_RESTORE_FAILURE_STAGE=CONTAINER_IDENTITY_OR_SECURITY_MISMATCH' >&2
+            exit 1
+          fi
+          sudo python3 - "\${candidate}" "\${destination}" '${GCE_USER}' <<'PY'
+          import os
+          import pwd
+          import shutil
+          import sys
+          import tempfile
+
+          source, destination, owner = sys.argv[1:]
+          linked = False
+          if os.path.lexists(destination):
+              raise SystemExit("runtime environment appeared during preflight")
+          directory = os.path.dirname(destination)
+          uid = pwd.getpwnam(owner).pw_uid
+          gid = pwd.getpwnam(owner).pw_gid
+          fd, staged = tempfile.mkstemp(prefix=".env.restore-", dir=directory)
+          try:
+              os.fchmod(fd, 0o600)
+              with os.fdopen(fd, "wb") as output, open(source, "rb") as input_file:
+                  shutil.copyfileobj(input_file, output)
+              os.chown(staged, uid, gid)
+              os.link(staged, destination)
+              linked = True
+              os.unlink(staged)
+              if (os.stat(destination).st_mode & 0o777) != 0o600:
+                  raise SystemExit("runtime environment mode verification failed")
+              with open(source, "rb") as input_file, open(destination, "rb") as output:
+                  if input_file.read() != output.read():
+                      raise SystemExit("runtime environment content verification failed")
+          except BaseException:
+              if linked:
+                  try:
+                      os.unlink(destination)
+                  except FileNotFoundError:
+                      pass
+              try:
+                  os.unlink(staged)
+              except FileNotFoundError:
+                  pass
+              raise
+          PY
+          echo 'GATEWAY_RESTORE_RESULT=CREATED_MISSING_ENV_ONLY'
+          EOF
+          )
+          cleanup_remote() {
+            gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "rm -f '${remote_env}'" >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote EXIT
+          gcloud compute scp "${ENV_FILE}" "${REMOTE_TARGET}:${remote_env}" "${SCP_FLAGS[@]}" >/dev/null
+          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${remote_command}"
+
       - name: Deploy and Log Setup
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.deploy_mode != 'restore-env' }}
         run: |
           set -euo pipefail
 

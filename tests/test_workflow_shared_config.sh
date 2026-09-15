@@ -28,12 +28,12 @@ start = "          python3 - <<'PY'\n"
 code = workflow.split(start, 1)[1].split("          PY\n", 1)[0]
 code = "\n".join(line.removeprefix("          ") for line in code.splitlines())
 
-def select(targets_json: str) -> subprocess.CompletedProcess[str]:
+def select(targets_json: str, mode: str = "keepalive") -> subprocess.CompletedProcess[str]:
     with tempfile.NamedTemporaryFile() as output:
         env = os.environ | {
             "TARGETS_JSON": targets_json,
             "SELECTED_TARGET": "all",
-            "SELECTED_DEPLOY_MODE": "keepalive",
+            "SELECTED_DEPLOY_MODE": mode,
             "GITHUB_OUTPUT": output.name,
         }
         return subprocess.run([sys.executable, "-c", code], env=env, text=True, capture_output=True)
@@ -44,6 +44,9 @@ assert "IB_GATEWAY_TARGETS_JSON is required" in missing.stderr
 
 configured = select('{"gateway-a": {}}')
 assert configured.returncode == 0, configured.stderr
+restore_all = select('{"gateway-a": {}}', "restore-env")
+assert restore_all.returncode != 0
+assert "one explicit target" in restore_all.stderr
 PY
 grep -Fq 'id-token: write' "$workflow_file"
 grep -Fq 'timeout-minutes: 75' "$workflow_file"
@@ -77,7 +80,18 @@ grep -Fq 'tar -xzf' "$workflow_file"
 grep -Fq 'gcloud compute instances reset "${GCE_INSTANCE_NAME}"' "$workflow_file"
 grep -Fq 'run_remote_ssh "Repository sync" "${REMOTE_SYNC_COMMAND}"' "$workflow_file"
 grep -Fq 'copy_remote_file "${ENV_FILE}" "${DEPLOY_PATH}/.env"' "$workflow_file"
-grep -Fq 'A full gateway deployment requires one explicit target' "$workflow_file"
+grep -Fq 'A full or restore-env gateway operation requires one explicit target' "$workflow_file"
+grep -Fq '          - restore-env' "$workflow_file"
+grep -Fq 'Restore missing gateway runtime environment' "$workflow_file"
+grep -Fq 'RUNTIME_ENV_ALREADY_EXISTS' "$workflow_file"
+grep -Fq 'CONTAINER_IDENTITY_OR_SECURITY_MISMATCH' "$workflow_file"
+grep -Fq 'docker compose --project-name "\${project}" --env-file "\${candidate}" config --format json' "$workflow_file"
+grep -Fq 'os.link(staged, destination)' "$workflow_file"
+grep -Fq 'os.fchmod(fd, 0o600)' "$workflow_file"
+grep -Fq 'restore-env requires target-specific Secret Manager names' "$workflow_file"
+grep -Fq 'TOTP_SECRET_SECRET_NAME is required for restore-env' "$workflow_file"
+grep -Fq "inputs.deploy_mode != 'restore-env'" "$workflow_file"
+python3 "$repo_dir/tests/test_restore_env_workflow_mock.py"
 grep -Fq 'Runtime keepalive uses the already released source and environment' "$workflow_file"
 grep -Fq 'sudo bash ./scripts/ensure_host_swap.sh' "$workflow_file"
 grep -Fq 'host_2fa_bot_sha256="\$(sha256sum ./2fa_bot.py' "$workflow_file"
