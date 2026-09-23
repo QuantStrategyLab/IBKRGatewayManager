@@ -17,34 +17,81 @@ grep -Fq 'IB_GATEWAY_TARGETS_JSON is required' "$workflow_file"
 ! grep -Fq 'ibkr-gateway-deploy@' "$workflow_file"
 
 python3 - "$workflow_file" <<'PY'
-from pathlib import Path
+import json
 import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
 start = "          python3 - <<'PY'\n"
 code = workflow.split(start, 1)[1].split("          PY\n", 1)[0]
 code = "\n".join(line.removeprefix("          ") for line in code.splitlines())
 
-def select(targets_json: str, mode: str = "keepalive") -> subprocess.CompletedProcess[str]:
-    with tempfile.NamedTemporaryFile() as output:
+def select(
+    targets_json: str,
+    mode: str = "keepalive",
+    event: str = "schedule",
+    selected_target: str = "all",
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str], str]:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        output = Path(temp_dir) / "output"
+        summary = Path(temp_dir) / "summary"
         env = os.environ | {
             "TARGETS_JSON": targets_json,
-            "SELECTED_TARGET": "all",
+            "SELECTED_TARGET": selected_target,
             "SELECTED_DEPLOY_MODE": mode,
-            "GITHUB_OUTPUT": output.name,
+            "GITHUB_EVENT_NAME": event,
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_STEP_SUMMARY": str(summary),
         }
-        return subprocess.run([sys.executable, "-c", code], env=env, text=True, capture_output=True)
+        result = subprocess.run([sys.executable, "-c", code], env=env, text=True, capture_output=True)
+        outputs = (
+            dict(line.split("=", 1) for line in output.read_text().splitlines())
+            if output.exists()
+            else {}
+        )
+        summary_text = summary.read_text() if summary.exists() else ""
+        return result, outputs, summary_text
 
-missing = select("")
+missing, _, _ = select("")
 assert missing.returncode != 0
 assert "IB_GATEWAY_TARGETS_JSON is required" in missing.stderr
 
-configured = select('{"gateway-a": {}}')
+configured, outputs, summary = select('{"gateway-a": {}}')
 assert configured.returncode == 0, configured.stderr
-restore_all = select('{"gateway-a": {}}', "restore-env")
+assert [target["name"] for target in json.loads(outputs["matrix"])["target"]] == ["gateway-a"]
+assert outputs["has_targets"] == "true"
+assert "Selected: gateway-a" in summary
+
+targets = '{"active": {}, "parked": {"maintenance_enabled": false}}'
+scheduled, outputs, summary = select(targets)
+assert scheduled.returncode == 0, scheduled.stderr
+assert [target["name"] for target in json.loads(outputs["matrix"])["target"]] == ["active"]
+assert outputs["has_targets"] == "true"
+assert "Skipped parked: maintenance_enabled=false; runtime state not verified." in summary
+
+all_parked, outputs, summary = select('{"parked": {"maintenance_enabled": false}}')
+assert all_parked.returncode == 0, all_parked.stderr
+assert json.loads(outputs["matrix"])["target"] == []
+assert outputs["has_targets"] == "false"
+assert "Selected: none" in summary
+
+manual, outputs, summary = select(targets, event="workflow_dispatch", selected_target="parked")
+assert manual.returncode == 0, manual.stderr
+assert [target["name"] for target in json.loads(outputs["matrix"])["target"]] == ["parked"]
+assert "Skipped parked" not in summary
+
+manual_all, outputs, _ = select(targets, event="workflow_dispatch")
+assert manual_all.returncode == 0, manual_all.stderr
+assert [target["name"] for target in json.loads(outputs["matrix"])["target"]] == ["active", "parked"]
+
+invalid, _, _ = select('{"gateway-a": {"maintenance_enabled": "false"}}')
+assert invalid.returncode != 0
+assert "must be a boolean" in invalid.stderr
+
+restore_all, _, _ = select('{"gateway-a": {}}', "restore-env", event="workflow_dispatch")
 assert restore_all.returncode != 0
 assert "one explicit target" in restore_all.stderr
 PY
