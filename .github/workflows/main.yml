@@ -170,6 +170,7 @@ jobs:
       TARGET_NAME: ${{ matrix.target.name }}
       DEPLOY_EVENT_NAME: ${{ github.event_name }}
       GCP_PROJECT_ID: ${{ matrix.target.gcp_project_id }}
+      GCP_SECRET_PROJECT_ID: ${{ matrix.target.gcp_secret_project_id || matrix.target.gcp_project_id }}
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ matrix.target.gcp_workload_identity_provider }}
       GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ matrix.target.gcp_workload_identity_service_account }}
       GCE_USER: ${{ matrix.target.gce_user }}
@@ -359,7 +360,7 @@ jobs:
               exit 1
             fi
 
-            printf '%s' "${secret_value}" | gcloud secrets versions add "${secret_name}" --project "${GCP_PROJECT_ID}" --data-file=- >/dev/null
+            printf '%s' "${secret_value}" | gcloud secrets versions add "${secret_name}" --project "${GCP_SECRET_PROJECT_ID}" --data-file=- >/dev/null
             cleanup_secret_versions "${secret_name}"
           }
 
@@ -374,7 +375,7 @@ jobs:
 
             old_versions="$(
               gcloud secrets versions list "${secret_name}" \
-                --project "${GCP_PROJECT_ID}" \
+                --project "${GCP_SECRET_PROJECT_ID}" \
                 --format=json \
                 | python3 -c 'import json, sys; rows = json.load(sys.stdin); active = [int(row["name"].rsplit("/", 1)[-1]) for row in rows if row.get("state") in {"ENABLED", "DISABLED"}]; keep = max(active) if active else None; print("\n".join(str(version) for version in active if version != keep))'
             )"
@@ -385,7 +386,7 @@ jobs:
               fi
               gcloud secrets versions destroy "${version}" \
                 --secret "${secret_name}" \
-                --project "${GCP_PROJECT_ID}" \
+                --project "${GCP_SECRET_PROJECT_ID}" \
                 --quiet >/dev/null
             done <<< "${old_versions}"
           }
@@ -421,7 +422,7 @@ jobs:
             local fallback_value="$2"
 
             if [ -n "${secret_name:-}" ]; then
-              gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "${secret_name}"
+              gcloud secrets versions access latest --project "${GCP_SECRET_PROJECT_ID}" --secret "${secret_name}"
             else
               if [ "${WORKFLOW_DISPATCH_MODE:-}" = "restore-env" ]; then
                 echo "restore-env requires target-specific Secret Manager names." >&2

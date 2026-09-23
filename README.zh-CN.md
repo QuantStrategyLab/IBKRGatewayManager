@@ -54,6 +54,8 @@ IBKRGatewayManager 是 QuantStrategyLab 的IBKR Gateway 运维工具。管理 IB
 
 使用 Secret Manager secret 的**名称**（full deploy 还要配置对应 credential secret-name 字段），不要写入 secret 值。不得提交目标 JSON、凭证、账户标识、地址或私钥。缺少目标配置时，会在任何云认证或远端操作前失败关闭。
 
+迁移 VM 到新项目时，可选的 `gcp_secret_project_id` 可继续从原项目读取 Secret Manager；不填则使用 `gcp_project_id`。部署 service account 须同时有新 VM 和原项目中指定 secret 的权限。新 VM 就绪且旧 Gateway 停止后，才能修改目标配置。
+
 ## 仓库结构
 
 - `tests/`：单元测试、契约测试和回归测试。

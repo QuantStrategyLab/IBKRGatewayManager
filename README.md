@@ -54,6 +54,8 @@ Deployment workflows require the repository-level Actions variable `IB_GATEWAY_T
 
 Use Secret Manager secret *names* (and, for full deployments, the corresponding credential secret-name fields) rather than secret values. Do not commit target JSON, credentials, account identifiers, addresses, or private keys. A missing target configuration fails before any cloud authentication or remote operation.
 
+When moving a VM to another project, optional `gcp_secret_project_id` keeps Secret Manager reads in the existing project; otherwise secrets come from `gcp_project_id`. The configured deployment service account needs access to both the VM and those specific secrets. Change the target only after the new VM is ready and the old Gateway has stopped.
+
 ## Repository layout
 
 - `tests/`: unit, contract, and regression tests.
