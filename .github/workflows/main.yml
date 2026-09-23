@@ -63,6 +63,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
+      has_targets: ${{ steps.targets.outputs.has_targets }}
     env:
       TARGETS_JSON: ${{ vars.IB_GATEWAY_TARGETS_JSON }}
       SELECTED_TARGET: ${{ github.event.inputs.target }}
@@ -105,6 +106,8 @@ jobs:
                   raise SystemExit("Each gateway target requires a name")
               if name in seen:
                   raise SystemExit(f"Duplicate gateway target: {name}")
+              if not isinstance(target.get("maintenance_enabled", True), bool):
+                  raise SystemExit(f"Target {name} maintenance_enabled must be a boolean")
               seen.add(name)
               normalized.append(target)
 
@@ -115,8 +118,13 @@ jobs:
                   "A full or restore-env gateway operation requires one explicit target; "
                   "use keepalive for all-target maintenance."
               )
+          skipped = []
           if selected_name == "all":
-              selected = normalized
+              if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+                  selected = [target for target in normalized if target.get("maintenance_enabled", True)]
+                  skipped = [target for target in normalized if not target.get("maintenance_enabled", True)]
+              else:
+                  selected = normalized
           else:
               selected = [target for target in normalized if target["name"] == selected_name]
               if not selected:
@@ -125,11 +133,23 @@ jobs:
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write("matrix=" + json.dumps({"target": selected}, separators=(",", ":")) + "\n")
-          print("Selected targets: " + ", ".join(target["name"] for target in selected))
+              output.write("has_targets=" + str(bool(selected)).lower() + "\n")
+          selected_names = ", ".join(target["name"] for target in selected) or "none"
+          print("Selected targets: " + selected_names)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("### Gateway maintenance selection\n\n")
+              summary.write(f"Selected: {selected_names}\n\n")
+              for target in skipped:
+                  name = target["name"]
+                  print(f"Skipped scheduled maintenance: {name} (maintenance_enabled=false)")
+                  summary.write(
+                      f"- Skipped {name}: maintenance_enabled=false; runtime state not verified.\n"
+                  )
           PY
 
   deploy:
     needs: select-targets
+    if: ${{ needs.select-targets.outputs.has_targets == 'true' }}
     name: deploy (${{ matrix.target.name }})
     runs-on: ubuntu-latest
     # A progressing IB Gateway login may legitimately consume the bounded
