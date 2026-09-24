@@ -391,7 +391,7 @@ assert remote.stdout.strip() == "GATEWAY_REMOTE_FAILURE_STAGE=ENSURE_HOST_SWAP"
 assert sensitive not in remote.stdout
 
 unknown = classify(f"{sensitive}\nGATEWAY_REMOTE_FAILURE_STAGE=UNTRUSTED_STAGE\n")
-assert unknown.stdout.strip().endswith("GATEWAY_DEPLOY_FAILURE_STAGE=REMOTE_COMMAND_OR_TRANSPORT_FAILED")
+assert unknown.stdout.strip().endswith("GATEWAY_DEPLOY_FAILURE_STAGE=REMOTE_COMMAND_FAILED")
 assert sensitive not in unknown.stdout
 
 transport = classify(f"{sensitive}\nssh: connect to host failed\n")
