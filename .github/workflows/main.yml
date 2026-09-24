@@ -178,6 +178,7 @@ jobs:
       GCE_ZONE: ${{ matrix.target.gce_zone }}
       DEPLOY_PATH: ${{ matrix.target.deploy_path }}
       IB_GATEWAY_MODE: ${{ matrix.target.mode }}
+      IB_GATEWAY_BASE_VERSION: ${{ matrix.target.ib_gateway_base_version }}
       IB_GATEWAY_CONTAINER_NAME: ${{ matrix.target.container_name }}
       IB_GATEWAY_COMPOSE_PROJECT_NAME: ${{ matrix.target.compose_project_name }}
       IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ matrix.target.compose_service_name }}
@@ -526,6 +527,7 @@ jobs:
               "IB_GATEWAY_PAPER_HOST_PORT": os.environ.get("IB_GATEWAY_PAPER_HOST_PORT", ""),
               "IB_GATEWAY_VNC_HOST_ADDRESS": os.environ.get("IB_GATEWAY_VNC_HOST_ADDRESS", ""),
               "IB_GATEWAY_VNC_HOST_PORT": os.environ.get("IB_GATEWAY_VNC_HOST_PORT", ""),
+              "IB_GATEWAY_BASE_VERSION": os.environ.get("IB_GATEWAY_BASE_VERSION", ""),
           }
           values.update({key: value for key, value in optional_values.items() if value})
 

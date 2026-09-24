@@ -1,4 +1,5 @@
-FROM gnzsnz/ib-gateway:10.50.1e
+ARG IB_GATEWAY_BASE_VERSION=10.50.1e
+FROM gnzsnz/ib-gateway:${IB_GATEWAY_BASE_VERSION}
 
 USER root
 RUN apt-get update && \

@@ -54,6 +54,8 @@ IBKRGatewayManager 是 QuantStrategyLab 的IBKR Gateway 运维工具。管理 IB
 
 使用 Secret Manager secret 的**名称**，不要写入 secret 值。完整部署要求为 SSH 密钥、Gateway 用户名和密码指定目标专属 secret 名称。VNC 是可选的：不设置 `vnc_server_password_secret_name` 即停用 VNC 服务。TOTP 自动填码默认关闭；显式启用时也必须指定目标专属 TOTP secret 名称。关闭时工作流不读取或下发 TOTP 种子。不得提交目标 JSON、凭证、账户标识、地址或私钥。缺少必需目标配置时，会在任何云认证或远端操作前失败关闭。
 
+可选的 `ib_gateway_base_version` 为单个目标指定 Gateway 基础镜像版本；未设置时使用 `10.50.1e`。仅在该目标完成兼容性核对后调整，其他目标不受影响。
+
 完整部署以 `0600` 权限安装 VM 上的运行环境 `.env`。Gateway 使用配置的用户名和密码；显式启用 `ibkr_2fa_autofill` 时，2FA bot 还会读取该目标的 TOTP 种子并填写兼容的验证弹窗，这条路径不使用 VNC。启用平台流量前仍须核实 API 和账户身份。VM 会保存 Gateway 密码；启用自动填码时也会保存 TOTP 种子，应限制该主机及部署身份的访问权限。
 
 迁移 VM 到新项目时，可选的 `gcp_secret_project_id` 可继续从原项目读取 Secret Manager；不填则使用 `gcp_project_id`。部署 service account 须同时有新 VM 和原项目中指定 secret 的权限。新 VM 就绪且旧 Gateway 停止后，才能修改目标配置。
