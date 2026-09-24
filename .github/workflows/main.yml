@@ -999,6 +999,9 @@ jobs:
             local command_log="$1"
             local recovery_stage
             local remote_stage
+            if grep -Eq 'GATEWAY_(RECOVERY|REMOTE)_FAILURE_STAGE=[A-Z0-9_]+' "${command_log}"; then
+              remote_deploy_reached_host=true
+            fi
             recovery_stage="$(grep -Eo 'GATEWAY_RECOVERY_FAILURE_STAGE=[A-Z0-9_]+' "${command_log}" | tail -n 1 || true)"
             case "${recovery_stage}" in
               GATEWAY_RECOVERY_FAILURE_STAGE=RECOVERY_CONFIGURATION_INVALID|              GATEWAY_RECOVERY_FAILURE_STAGE=RECOVERY_LOCK_TIMEOUT|              GATEWAY_RECOVERY_FAILURE_STAGE=GATEWAY_UI_BLOCKER|              GATEWAY_RECOVERY_FAILURE_STAGE=DIALOG_RECOVERY_NOT_READY|              GATEWAY_RECOVERY_FAILURE_STAGE=CONTAINER_START_FAILED|              GATEWAY_RECOVERY_FAILURE_STAGE=TWOFA_WATCHER_FAILED|              GATEWAY_RECOVERY_FAILURE_STAGE=CONTAINER_RESTART_FAILED|              GATEWAY_RECOVERY_FAILURE_STAGE=CONTAINER_RECREATE_FAILED|              GATEWAY_RECOVERY_FAILURE_STAGE=GATEWAY_NOT_READY_AFTER_RECREATE)
@@ -1012,13 +1015,18 @@ jobs:
                 log_step "${remote_stage}"
                 ;;
               *)
-                log_step "GATEWAY_DEPLOY_FAILURE_STAGE=REMOTE_COMMAND_OR_TRANSPORT_FAILED"
+                if [ "${remote_deploy_reached_host}" = "true" ]; then
+                  log_step "GATEWAY_DEPLOY_FAILURE_STAGE=REMOTE_COMMAND_FAILED"
+                else
+                  log_step "GATEWAY_DEPLOY_FAILURE_STAGE=REMOTE_COMMAND_OR_TRANSPORT_FAILED"
+                fi
                 ;;
             esac
           }
 
           run_sanitized_remote_deploy() {
             local command_log
+            remote_deploy_reached_host=false
             command_log="$(mktemp)"
             if gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DEPLOY_COMMAND}" >"${command_log}" 2>&1; then
               rm -f "${command_log}"
@@ -1032,6 +1040,11 @@ jobs:
           log_step "Running remote deploy commands for event ${DEPLOY_EVENT_NAME} in mode ${DEPLOY_MODE}"
           if run_sanitized_remote_deploy; then
             exit 0
+          fi
+
+          if [ "${remote_deploy_reached_host}" = "true" ]; then
+            log_step "Remote command failed after reaching the VM; leaving the VM running without an automatic reset"
+            exit 1
           fi
 
           log_step "Remote deploy failed; resetting VM, re-preparing workspace, and retrying once"
