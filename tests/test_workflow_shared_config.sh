@@ -94,23 +94,6 @@ invalid, _, _ = select('{"gateway-a": {"maintenance_enabled": "false"}}')
 assert invalid.returncode != 0
 assert "must be a boolean" in invalid.stderr
 
-manual_auth_config = '{"gateway-a": {"manual_auth": true, "maintenance_enabled": false, "ibkr_2fa_autofill": "no"}}'
-manual_auth, outputs, _ = select(manual_auth_config, "full", event="workflow_dispatch", selected_target="gateway-a")
-assert manual_auth.returncode == 0, manual_auth.stderr
-assert json.loads(outputs["matrix"])["target"][0]["manual_auth"] is True
-
-invalid_manual, _, _ = select('{"gateway-a": {"manual_auth": "true"}}')
-assert invalid_manual.returncode != 0
-assert "manual_auth must be a boolean" in invalid_manual.stderr
-
-invalid_autofill, _, _ = select('{"gateway-a": {"manual_auth": true, "maintenance_enabled": false, "ibkr_2fa_autofill": "yes"}}')
-assert invalid_autofill.returncode != 0
-assert "cannot combine manual_auth with TOTP auto-fill" in invalid_autofill.stderr
-
-invalid_maintenance, _, _ = select('{"gateway-a": {"manual_auth": true}}')
-assert invalid_maintenance.returncode != 0
-assert "must disable scheduled maintenance" in invalid_maintenance.stderr
-
 restore_all, _, _ = select('{"gateway-a": {}}', "restore-env", event="workflow_dispatch")
 assert restore_all.returncode != 0
 assert "one explicit target" in restore_all.stderr
@@ -213,9 +196,8 @@ grep -Fq '"COMPOSE_PROJECT_NAME": os.environ.get("IB_GATEWAY_COMPOSE_PROJECT_NAM
 grep -Fq '"IB_GATEWAY_LIVE_HOST_PORT": os.environ.get("IB_GATEWAY_LIVE_HOST_PORT", "")' "$workflow_file"
 grep -Fq '"TWOFA_DEVICE": os.environ.get("TWOFA_DEVICE", "")' "$workflow_file"
 grep -Fq '"IBKR_2FA_AUTOFILL": os.environ.get("IBKR_2FA_AUTOFILL", "")' "$workflow_file"
-grep -Fq '"IBKR_MANUAL_AUTH": os.environ.get("IBKR_MANUAL_AUTH", "")' "$workflow_file"
-grep -Fq 'GATEWAY_MANUAL_AUTH_REQUIRED=true' "$workflow_file"
-grep -Fq "echo \"Gateway container started; human broker authentication and API/account checks remain required.\" >> \"\${GITHUB_STEP_SUMMARY}\"" "$workflow_file"
+grep -Fq 'if [ -n "${VNC_SERVER_PASSWORD_SECRET_NAME:-}" ]; then' "$workflow_file"
+! grep -Fq 'require_secret_source VNC_SERVER_PASSWORD_SECRET_NAME' "$workflow_file"
 grep -Fq '"IBKR_2FA_MAX_SUBMISSIONS": os.environ.get("IBKR_2FA_MAX_SUBMISSIONS") or "3"' "$workflow_file"
 grep -Fq '"IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW": os.environ.get("IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW") or "1"' "$workflow_file"
 grep -Fq '"IBKR_2FA_SUBMISSION_RESET_SECONDS": os.environ.get("IBKR_2FA_SUBMISSION_RESET_SECONDS") or "0"' "$workflow_file"
