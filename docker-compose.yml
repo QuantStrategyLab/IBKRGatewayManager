@@ -1,6 +1,9 @@
 services:
   ib-gateway:
-    build: .
+    build:
+      context: .
+      args:
+        IB_GATEWAY_BASE_VERSION: ${IB_GATEWAY_BASE_VERSION:-10.50.1e}
     container_name: ${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}
     restart: always
     environment:

@@ -54,6 +54,8 @@ Deployment workflows require the repository-level Actions variable `IB_GATEWAY_T
 
 Use Secret Manager secret *names* rather than secret values. Full deployments require target-specific names for the SSH key and Gateway username and password. VNC is optional: omit `vnc_server_password_secret_name` to leave the VNC server disabled. TOTP auto-fill is off by default; an explicit opt-in also requires a target-specific TOTP secret name. When auto-fill is off, the workflow does not fetch or send the TOTP seed to the VM. Do not commit target JSON, credentials, account identifiers, addresses, or private keys. A missing required target configuration fails before any cloud authentication or remote operation.
 
+Optional `ib_gateway_base_version` selects the Gateway base image version for one target. The default is `10.50.1e`; change it only after checking that target's compatibility. Other targets keep their configured version.
+
 Full deployments install the VM runtime `.env` with mode `0600`. The Gateway uses the configured username and password; when `ibkr_2fa_autofill` is explicitly enabled, the 2FA bot also reads the target-specific TOTP seed and fills a compatible challenge. This path does not use VNC. Verify API and account identity before enabling platform traffic. The VM stores the Gateway password and, when enabled, the TOTP seed; restrict access to that host and its deployment identity.
 
 When moving a VM to another project, optional `gcp_secret_project_id` keeps Secret Manager reads in the existing project; otherwise secrets come from `gcp_project_id`. The configured deployment service account needs access to both the VM and those specific secrets. Change the target only after the new VM is ready and the old Gateway has stopped.
