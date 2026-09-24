@@ -12,6 +12,7 @@ grep -Fq 'matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}' "$workfl
 grep -Fq 'GCP_PROJECT_ID: ${{ matrix.target.gcp_project_id }}' "$workflow_file"
 grep -Fq 'GCP_SECRET_PROJECT_ID: ${{ matrix.target.gcp_secret_project_id || matrix.target.gcp_project_id }}' "$workflow_file"
 grep -Fq 'gcloud secrets versions access latest --project "${GCP_SECRET_PROJECT_ID}"' "$workflow_file"
+! grep -Fq 'gcloud secrets versions access latest --project "${GCP_PROJECT_ID}"' "$workflow_file"
 grep -Fq 'IB_GATEWAY_TARGETS_JSON is required' "$workflow_file"
 ! grep -Fq 'LEGACY_' "$workflow_file"
 ! grep -Fq 'interactivebrokersquant' "$workflow_file"
@@ -93,6 +94,23 @@ invalid, _, _ = select('{"gateway-a": {"maintenance_enabled": "false"}}')
 assert invalid.returncode != 0
 assert "must be a boolean" in invalid.stderr
 
+manual_auth_config = '{"gateway-a": {"manual_auth": true, "maintenance_enabled": false, "ibkr_2fa_autofill": "no"}}'
+manual_auth, outputs, _ = select(manual_auth_config, "full", event="workflow_dispatch", selected_target="gateway-a")
+assert manual_auth.returncode == 0, manual_auth.stderr
+assert json.loads(outputs["matrix"])["target"][0]["manual_auth"] is True
+
+invalid_manual, _, _ = select('{"gateway-a": {"manual_auth": "true"}}')
+assert invalid_manual.returncode != 0
+assert "manual_auth must be a boolean" in invalid_manual.stderr
+
+invalid_autofill, _, _ = select('{"gateway-a": {"manual_auth": true, "maintenance_enabled": false, "ibkr_2fa_autofill": "yes"}}')
+assert invalid_autofill.returncode != 0
+assert "cannot combine manual_auth with TOTP auto-fill" in invalid_autofill.stderr
+
+invalid_maintenance, _, _ = select('{"gateway-a": {"manual_auth": true}}')
+assert invalid_maintenance.returncode != 0
+assert "must disable scheduled maintenance" in invalid_maintenance.stderr
+
 restore_all, _, _ = select('{"gateway-a": {}}', "restore-env", event="workflow_dispatch")
 assert restore_all.returncode != 0
 assert "one explicit target" in restore_all.stderr
@@ -128,7 +146,8 @@ grep -Fq 'git archive --format=tar.gz' "$workflow_file"
 grep -Fq 'tar -xzf' "$workflow_file"
 grep -Fq 'gcloud compute instances reset "${GCE_INSTANCE_NAME}"' "$workflow_file"
 grep -Fq 'run_remote_ssh "Repository sync" "${REMOTE_SYNC_COMMAND}"' "$workflow_file"
-grep -Fq 'copy_remote_file "${ENV_FILE}" "${DEPLOY_PATH}/.env"' "$workflow_file"
+grep -Fq 'copy_remote_file "${ENV_FILE}" "${REMOTE_ENV}"' "$workflow_file"
+grep -Fq "install -m 600 '\${REMOTE_ENV}' '\${DEPLOY_PATH}/.env'" "$workflow_file"
 grep -Fq 'A full or restore-env gateway operation requires one explicit target' "$workflow_file"
 grep -Fq '          - restore-env' "$workflow_file"
 grep -Fq 'Restore missing gateway runtime environment' "$workflow_file"
@@ -138,7 +157,7 @@ grep -Fq 'docker compose --project-name "\${project}" --env-file "\${candidate}"
 grep -Fq 'os.link(staged, destination)' "$workflow_file"
 grep -Fq 'os.fchmod(fd, 0o600)' "$workflow_file"
 grep -Fq 'restore-env requires target-specific Secret Manager names' "$workflow_file"
-grep -Fq 'TOTP_SECRET_SECRET_NAME is required for restore-env' "$workflow_file"
+grep -Fq 'require_secret_source TOTP_SECRET_SECRET_NAME TOTP_SECRET' "$workflow_file"
 grep -Fq "inputs.deploy_mode != 'restore-env'" "$workflow_file"
 python3 "$repo_dir/tests/test_restore_env_workflow_mock.py"
 grep -Fq 'Runtime keepalive uses the already released source and environment' "$workflow_file"
@@ -194,6 +213,9 @@ grep -Fq '"COMPOSE_PROJECT_NAME": os.environ.get("IB_GATEWAY_COMPOSE_PROJECT_NAM
 grep -Fq '"IB_GATEWAY_LIVE_HOST_PORT": os.environ.get("IB_GATEWAY_LIVE_HOST_PORT", "")' "$workflow_file"
 grep -Fq '"TWOFA_DEVICE": os.environ.get("TWOFA_DEVICE", "")' "$workflow_file"
 grep -Fq '"IBKR_2FA_AUTOFILL": os.environ.get("IBKR_2FA_AUTOFILL", "")' "$workflow_file"
+grep -Fq '"IBKR_MANUAL_AUTH": os.environ.get("IBKR_MANUAL_AUTH", "")' "$workflow_file"
+grep -Fq 'GATEWAY_MANUAL_AUTH_REQUIRED=true' "$workflow_file"
+grep -Fq "echo \"Gateway container started; human broker authentication and API/account checks remain required.\" >> \"\${GITHUB_STEP_SUMMARY}\"" "$workflow_file"
 grep -Fq '"IBKR_2FA_MAX_SUBMISSIONS": os.environ.get("IBKR_2FA_MAX_SUBMISSIONS") or "3"' "$workflow_file"
 grep -Fq '"IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW": os.environ.get("IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW") or "1"' "$workflow_file"
 grep -Fq '"IBKR_2FA_SUBMISSION_RESET_SECONDS": os.environ.get("IBKR_2FA_SUBMISSION_RESET_SECONDS") or "0"' "$workflow_file"

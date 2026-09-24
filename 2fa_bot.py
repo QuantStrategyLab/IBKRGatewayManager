@@ -11,7 +11,7 @@ from typing import Optional
 # ================= Configuration =================
 SECRET_KEY = os.environ.get("TOTP_SECRET")
 X11_DISPLAY = os.environ.get("DISPLAY_NUM", ":1")
-AUTOFILL_ENABLED = os.environ.get("IBKR_2FA_AUTOFILL", "yes").strip().lower() not in {
+AUTOFILL_ENABLED = os.environ.get("IBKR_2FA_AUTOFILL", "no").strip().lower() not in {
     "0",
     "false",
     "no",
@@ -168,15 +168,17 @@ def totp_seconds_remaining():
     return 30 - (int(time.time()) % 30)
 
 
-def run_xdotool(args, sensitive=False):
+def run_xdotool(args, sensitive=False, input_text=None):
     """Execute xdotool command on the X11 display with timeout protection."""
     env = os.environ.copy()
     env["DISPLAY"] = X11_DISPLAY
+    for secret_name in ("TOTP_SECRET", "TWS_USERID", "TWS_PASSWORD", "VNC_SERVER_PASSWORD"):
+        env.pop(secret_name, None)
     command = ["xdotool", *args]
     try:
         return subprocess.run(
             command, env=env,
-            capture_output=True, text=True,
+            capture_output=True, text=True, input=input_text,
             timeout=XDOTOOL_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
@@ -372,7 +374,7 @@ def focus_input_area(candidate):
 def type_totp_into_active_window(code):
     """Type into the focused control; Java dialogs can ignore direct window events."""
     run_xdotool(["key", "ctrl+a", "BackSpace"])
-    run_xdotool(["type", "--delay", str(TYPE_DELAY_MS), code], sensitive=True)
+    run_xdotool(["type", "--delay", str(TYPE_DELAY_MS), "--file", "-"], sensitive=True, input_text=code)
     time.sleep(PRE_ENTER_DELAY)
     run_xdotool(["key", "Return"])
 

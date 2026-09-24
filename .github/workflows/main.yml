@@ -108,6 +108,12 @@ jobs:
                   raise SystemExit(f"Duplicate gateway target: {name}")
               if not isinstance(target.get("maintenance_enabled", True), bool):
                   raise SystemExit(f"Target {name} maintenance_enabled must be a boolean")
+              if not isinstance(target.get("manual_auth", False), bool):
+                  raise SystemExit(f"Target {name} manual_auth must be a boolean")
+              if target.get("manual_auth", False) and str(target.get("ibkr_2fa_autofill", "no")).lower() in {"yes", "true", "1"}:
+                  raise SystemExit(f"Target {name} cannot combine manual_auth with TOTP auto-fill")
+              if target.get("manual_auth", False) and target.get("maintenance_enabled", True):
+                  raise SystemExit(f"Target {name} must disable scheduled maintenance during manual authentication")
               seen.add(name)
               normalized.append(target)
 
@@ -192,6 +198,7 @@ jobs:
       READ_ONLY_API: ${{ matrix.target.read_only_api }}
       TWOFA_DEVICE: ${{ matrix.target.twofa_device }}
       IBKR_2FA_AUTOFILL: ${{ matrix.target.ibkr_2fa_autofill }}
+      IBKR_MANUAL_AUTH: ${{ matrix.target.manual_auth }}
       IBKR_2FA_MAX_SUBMISSIONS: ${{ matrix.target.ibkr_2fa_max_submissions }}
       IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW: ${{ matrix.target.ibkr_2fa_max_submissions_per_window }}
       IBKR_2FA_SUBMISSION_RESET_SECONDS: ${{ matrix.target.ibkr_2fa_submission_reset_seconds }}
@@ -263,7 +270,16 @@ jobs:
             local fallback_var="$2"
             local label="$3"
 
-            if [ -n "${!secret_name_var:-}" ] || [ -n "${!fallback_var:-}" ]; then
+            if [ -n "${!secret_name_var:-}" ]; then
+              return 0
+            fi
+
+            if [ "${WORKFLOW_DISPATCH_MODE:-}" = "full" ] || [ "${WORKFLOW_DISPATCH_MODE:-}" = "restore-env" ]; then
+              echo "${label} requires a target-specific Secret Manager name for a full deployment." >&2
+              exit 1
+            fi
+
+            if [ -n "${!fallback_var:-}" ]; then
               return 0
             fi
 
@@ -272,47 +288,40 @@ jobs:
           }
 
           require_secret_source SSH_PRIVATE_KEY_SECRET_NAME SSH_PRIVATE_KEY SSH_PRIVATE_KEY
+          if [ "${IBKR_MANUAL_AUTH:-false}" = "true" ] && [ "${WORKFLOW_DISPATCH_MODE:-keepalive}" = "keepalive" ]; then
+            echo "Manual-auth targets cannot use keepalive recovery before human authentication." >&2
+            exit 1
+          fi
+          if [ "${IBKR_MANUAL_AUTH:-false}" = "true" ] && [ "${WORKFLOW_DISPATCH_MODE:-}" = "full" ] \
+            && [ "${{ github.event.inputs.sync_github_secrets_to_secret_manager }}" = "true" ]; then
+            echo "Manual-auth deployment cannot sync broker credentials from GitHub secrets." >&2
+            exit 1
+          fi
 
       - name: Check full-deploy credential config
         if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_mode == 'full' || inputs.deploy_mode == 'restore-env') }}
-        env:
-          TWS_USERID: ${{ secrets.TWS_USERID }}
-          TWS_PASSWORD: ${{ secrets.TWS_PASSWORD }}
-          TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
-          VNC_SERVER_PASSWORD: ${{ secrets.VNC_SERVER_PASSWORD }}
         run: |
           set -euo pipefail
 
           require_secret_source() {
             local secret_name_var="$1"
-            local fallback_var="$2"
-            local label="$3"
+            local label="$2"
 
-            if [ -n "${!secret_name_var:-}" ] || [ -n "${!fallback_var:-}" ]; then
+            if [ -n "${!secret_name_var:-}" ]; then
               return 0
             fi
 
-            echo "${label} is required. Set ${secret_name_var} as a GitHub variable pointing to Secret Manager, or set ${fallback_var} as a GitHub Actions secret." >&2
+            echo "${label} requires a target-specific Secret Manager name." >&2
             exit 1
           }
 
-          require_secret_source TWS_USERID_SECRET_NAME TWS_USERID TWS_USERID
-          require_secret_source TWS_PASSWORD_SECRET_NAME TWS_PASSWORD TWS_PASSWORD
-          require_secret_source VNC_SERVER_PASSWORD_SECRET_NAME VNC_SERVER_PASSWORD VNC_SERVER_PASSWORD
-          if [ "${WORKFLOW_DISPATCH_MODE:-}" = "restore-env" ]; then
-            for required_secret_name in TWS_USERID_SECRET_NAME TWS_PASSWORD_SECRET_NAME VNC_SERVER_PASSWORD_SECRET_NAME; do
-              if [ -z "${!required_secret_name:-}" ]; then
-                echo "${required_secret_name} is required for restore-env; refusing cross-account fallback." >&2
-                exit 1
-              fi
-            done
-          fi
-          twofa_autofill="$(printf '%s' "${IBKR_2FA_AUTOFILL:-}" | tr '[:upper:]' '[:lower:]')"
-          if [ "${twofa_autofill}" = "yes" ] || [ "${twofa_autofill}" = "true" ] || [ "${twofa_autofill}" = "1" ]; then
-            require_secret_source TOTP_SECRET_SECRET_NAME TOTP_SECRET TOTP_SECRET
-            if [ "${WORKFLOW_DISPATCH_MODE:-}" = "restore-env" ] && [ -z "${TOTP_SECRET_SECRET_NAME:-}" ]; then
-              echo "TOTP_SECRET_SECRET_NAME is required for restore-env; refusing cross-account fallback." >&2
-              exit 1
+          require_secret_source VNC_SERVER_PASSWORD_SECRET_NAME VNC_SERVER_PASSWORD
+          if [ "${IBKR_MANUAL_AUTH:-false}" != "true" ]; then
+            require_secret_source TWS_USERID_SECRET_NAME TWS_USERID
+            require_secret_source TWS_PASSWORD_SECRET_NAME TWS_PASSWORD
+            twofa_autofill="$(printf '%s' "${IBKR_2FA_AUTOFILL:-}" | tr '[:upper:]' '[:lower:]')"
+            if [ "${twofa_autofill}" = "yes" ] || [ "${twofa_autofill}" = "true" ] || [ "${twofa_autofill}" = "1" ]; then
+              require_secret_source TOTP_SECRET_SECRET_NAME TOTP_SECRET
             fi
           fi
 
@@ -407,7 +416,7 @@ jobs:
           sync_secret "${TWS_PASSWORD_SECRET_NAME:-}" "${TWS_PASSWORD:-}" "TWS_PASSWORD"
           sync_secret "${VNC_SERVER_PASSWORD_SECRET_NAME:-}" "${VNC_SERVER_PASSWORD:-}" "VNC_SERVER_PASSWORD"
           twofa_autofill="$(printf '%s' "${IBKR_2FA_AUTOFILL:-}" | tr '[:upper:]' '[:lower:]')"
-          if [ "${twofa_autofill}" = "yes" ] || [ "${twofa_autofill}" = "true" ] || [ "${twofa_autofill}" = "1" ] || [ -n "${TOTP_SECRET:-}" ]; then
+          if [ "${twofa_autofill}" = "yes" ] || [ "${twofa_autofill}" = "true" ] || [ "${twofa_autofill}" = "1" ]; then
             sync_secret "${TOTP_SECRET_SECRET_NAME:-}" "${TOTP_SECRET:-}" "TOTP_SECRET"
           fi
 
@@ -451,42 +460,38 @@ jobs:
 
       - name: Prepare full-deploy runtime environment
         if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_mode == 'full' || inputs.deploy_mode == 'restore-env') }}
-        env:
-          TWS_USERID: ${{ secrets.TWS_USERID }}
-          TWS_PASSWORD: ${{ secrets.TWS_PASSWORD }}
-          TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
-          VNC_SERVER_PASSWORD: ${{ secrets.VNC_SERVER_PASSWORD }}
         run: |
           set -euo pipefail
 
           resolve_secret() {
             local secret_name="$1"
-            local fallback_value="$2"
 
-            if [ -n "${secret_name:-}" ]; then
-              gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "${secret_name}"
-            else
-              printf '%s' "${fallback_value}"
+            if [ -z "${secret_name:-}" ]; then
+              echo "A target-specific Secret Manager name is required." >&2
+              return 1
             fi
+            gcloud secrets versions access latest --project "${GCP_SECRET_PROJECT_ID}" --secret "${secret_name}"
           }
 
-          tws_userid="$(resolve_secret "${TWS_USERID_SECRET_NAME:-}" "${TWS_USERID:-}")"
-          tws_password="$(resolve_secret "${TWS_PASSWORD_SECRET_NAME:-}" "${TWS_PASSWORD:-}")"
+          tws_userid=""
+          tws_password=""
           totp_secret=""
-          if [ "${WORKFLOW_DISPATCH_MODE:-}" = "restore-env" ] && [ -z "${TOTP_SECRET_SECRET_NAME:-}" ] \
-            && [ -n "${TOTP_SECRET:-}" ]; then
-            echo "TOTP_SECRET_SECRET_NAME is required for restore-env; refusing global TOTP fallback." >&2
-            exit 1
+          if [ "${IBKR_MANUAL_AUTH:-false}" != "true" ]; then
+            tws_userid="$(resolve_secret "${TWS_USERID_SECRET_NAME:-}")"
+            tws_password="$(resolve_secret "${TWS_PASSWORD_SECRET_NAME:-}")"
+            twofa_autofill="$(printf '%s' "${IBKR_2FA_AUTOFILL:-}" | tr '[:upper:]' '[:lower:]')"
+            if [ "${twofa_autofill}" = "yes" ] || [ "${twofa_autofill}" = "true" ] || [ "${twofa_autofill}" = "1" ]; then
+              totp_secret="$(resolve_secret "${TOTP_SECRET_SECRET_NAME:-}")"
+            fi
           fi
-          if [ -n "${TOTP_SECRET_SECRET_NAME:-}" ] || [ -n "${TOTP_SECRET:-}" ]; then
-            totp_secret="$(resolve_secret "${TOTP_SECRET_SECRET_NAME:-}" "${TOTP_SECRET:-}")"
-          fi
-          vnc_server_password="$(resolve_secret "${VNC_SERVER_PASSWORD_SECRET_NAME:-}" "${VNC_SERVER_PASSWORD:-}")"
+          vnc_server_password="$(resolve_secret "${VNC_SERVER_PASSWORD_SECRET_NAME:-}")"
 
-          required_values=(tws_userid tws_password vnc_server_password)
-          twofa_autofill="$(printf '%s' "${IBKR_2FA_AUTOFILL:-}" | tr '[:upper:]' '[:lower:]')"
-          if [ "${twofa_autofill}" = "yes" ] || [ "${twofa_autofill}" = "true" ] || [ "${twofa_autofill}" = "1" ]; then
-            required_values+=(totp_secret)
+          required_values=(vnc_server_password)
+          if [ "${IBKR_MANUAL_AUTH:-false}" != "true" ]; then
+            required_values+=(tws_userid tws_password)
+            if [ "${twofa_autofill}" = "yes" ] || [ "${twofa_autofill}" = "true" ] || [ "${twofa_autofill}" = "1" ]; then
+              required_values+=(totp_secret)
+            fi
           fi
 
           for required_value in "${required_values[@]}"; do
@@ -521,6 +526,7 @@ jobs:
               "TWS_USERID": os.environ["RESOLVED_TWS_USERID"],
               "TWS_PASSWORD": os.environ["RESOLVED_TWS_PASSWORD"],
               "TOTP_SECRET": os.environ["RESOLVED_TOTP_SECRET"],
+              "IBKR_MANUAL_AUTH": os.environ.get("IBKR_MANUAL_AUTH", ""),
               "VNC_SERVER_PASSWORD": os.environ["RESOLVED_VNC_SERVER_PASSWORD"],
               "TRADING_MODE": os.environ["IB_GATEWAY_MODE"],
               "ACCEPT_API_FROM_IP": os.environ["CLOUD_RUN_EGRESS_CIDR"],
@@ -548,8 +554,7 @@ jobs:
           def quote(value: str) -> str:
               return "'" + value.replace("'", "'\"'\"'") + "'"
 
-          if os.environ.get("WORKFLOW_DISPATCH_MODE") == "restore-env":
-              os.umask(0o077)
+          os.umask(0o077)
           with open(env_file, "w", encoding="utf-8") as fh:
               for key, value in values.items():
                   fh.write(f"{key}={quote(value)}\n")
@@ -578,7 +583,8 @@ jobs:
           REMOTE_COMMON_FLAGS=(--project "${GCP_PROJECT_ID}" --zone "${GCE_ZONE}" --quiet --tunnel-through-iap --ssh-key-file "${SSH_KEY_FILE}")
           SSH_FLAGS=("${REMOTE_COMMON_FLAGS[@]}" --ssh-flag="-o ServerAliveInterval=30" --ssh-flag="-o ServerAliveCountMax=10" --ssh-flag="-o TCPKeepAlive=yes")
           SCP_FLAGS=("${REMOTE_COMMON_FLAGS[@]}" --scp-flag="-o ServerAliveInterval=30" --scp-flag="-o ServerAliveCountMax=10" --scp-flag="-o TCPKeepAlive=yes")
-          remote_env="/tmp/ibkr-restore-${TARGET_NAME}-${GITHUB_RUN_ID}.env"
+          remote_env_dir="/tmp/ibkr-restore-${TARGET_NAME}-${GITHUB_RUN_ID}"
+          remote_env="${remote_env_dir}/.env"
           remote_command=$(cat <<EOF
           set -euo pipefail
           candidate='${remote_env}'
@@ -718,9 +724,10 @@ jobs:
           EOF
           )
           cleanup_remote() {
-            gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "rm -f '${remote_env}'" >/dev/null 2>&1 || true
+            gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "rm -f '${remote_env}'; rmdir '${remote_env_dir}'" >/dev/null 2>&1 || true
           }
           trap cleanup_remote EXIT
+          gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "umask 077; install -d -m 700 '${remote_env_dir}'" >/dev/null
           gcloud compute scp "${ENV_FILE}" "${REMOTE_TARGET}:${remote_env}" "${SCP_FLAGS[@]}" >/dev/null
           gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${remote_command}"
 
@@ -807,6 +814,16 @@ jobs:
 
           SOURCE_ARCHIVE="$RUNNER_TEMP/ibkr-gateway-source.tar.gz"
           REMOTE_ARCHIVE="/tmp/ibkr-gateway-${TARGET_NAME}-${GITHUB_SHA}.tar.gz"
+          REMOTE_ENV_DIR="/tmp/ibkr-full-${TARGET_NAME}-${GITHUB_RUN_ID}"
+          REMOTE_ENV="${REMOTE_ENV_DIR}/.env"
+
+          cleanup_remote_env() {
+            if [ "${DEPLOY_MODE:-}" = "full" ]; then
+              gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" \
+                --command "rm -f '${REMOTE_ENV}'; rmdir '${REMOTE_ENV_DIR}'" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_remote_env EXIT
           git archive --format=tar.gz --output="${SOURCE_ARCHIVE}" HEAD
 
           REMOTE_SYNC_COMMAND=$(cat <<EOF
@@ -832,7 +849,10 @@ jobs:
             log_step "Syncing repository to ${DEPLOY_PATH}"
             run_remote_ssh "Repository sync" "${REMOTE_SYNC_COMMAND}"
             log_step "Uploading runtime env file"
-            copy_remote_file "${ENV_FILE}" "${DEPLOY_PATH}/.env"
+            run_remote_ssh "Prepare private env staging" "umask 077; install -d -m 700 '${REMOTE_ENV_DIR}'"
+            copy_remote_file "${ENV_FILE}" "${REMOTE_ENV}"
+            run_remote_ssh "Install private runtime env" \
+              "umask 077; install -m 600 '${REMOTE_ENV}' '${DEPLOY_PATH}/.env' && test \"\$(stat -c %a '${DEPLOY_PATH}/.env')\" = 600 && rm -f '${REMOTE_ENV}' && rmdir '${REMOTE_ENV_DIR}'"
           }
 
           DEPLOY_MODE="keepalive"
@@ -944,6 +964,24 @@ jobs:
           container_name="\${IB_GATEWAY_CONTAINER_NAME:-ib-gateway}"
           compose_service_name="\${IB_GATEWAY_COMPOSE_SERVICE_NAME:-ib-gateway}"
           resolve_ibkr_gateway_unit_names "\${container_name}" "\${IB_GATEWAY_UNIT_SUFFIX:-}"
+          if [ "\${IBKR_MANUAL_AUTH:-false}" = "true" ]; then
+            trap 'status=\$?; if [ "\${status}" -ne 0 ]; then echo "GATEWAY_REMOTE_FAILURE_STAGE=MANUAL_PREPARE" >&2; fi; exit "\${status}"' EXIT
+            sudo systemctl disable --now "\${IBKR_2FA_BOT_TIMER}" "\${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "\${IBKR_GATEWAY_DAILY_RESTART_TIMER}" 2>/dev/null || true
+            sudo systemctl stop "\${IBKR_2FA_BOT_SERVICE}" "\${IBKR_GATEWAY_HEALTHCHECK_SERVICE}" "\${IBKR_GATEWAY_DAILY_RESTART_SERVICE}" 2>/dev/null || true
+            sudo systemctl stop "\${IBKR_GATEWAY_HEALTHCHECK_SERVICE%.service}-deploy-failsafe.timer" 2>/dev/null || true
+            sudo bash ./scripts/ensure_host_swap.sh
+            if [ "${WORKFLOW_DISPATCH_REBUILD_WITHOUT_CACHE:-false}" = 'true' ]; then
+              sudo docker compose build --no-cache "\${compose_service_name}"
+            else
+              sudo docker compose build "\${compose_service_name}"
+            fi
+            sudo docker compose down
+            sudo docker compose up -d "\${compose_service_name}"
+            test "\$(sudo docker inspect -f '{{.State.Running}}' "\${container_name}")" = true
+            echo "GATEWAY_MANUAL_AUTH_REQUIRED=true"
+            echo "Container is running; broker authentication and API readiness are unverified."
+            exit 0
+          fi
           watchers_restored=false
           watcher_failsafe_name="\${IBKR_GATEWAY_HEALTHCHECK_SERVICE%.service}-deploy-failsafe"
           watcher_failsafe_seconds="\${IB_GATEWAY_WATCHER_FAILSAFE_SECONDS:-3900}"
@@ -1011,7 +1049,7 @@ jobs:
             esac
             remote_stage="$(grep -Eo 'GATEWAY_REMOTE_FAILURE_STAGE=[A-Z0-9_]+' "${command_log}" | tail -n 1 || true)"
             case "${remote_stage}" in
-              GATEWAY_REMOTE_FAILURE_STAGE=LOAD_RUNTIME_ENV|              GATEWAY_REMOTE_FAILURE_STAGE=ARM_WATCHER_FAILSAFE|              GATEWAY_REMOTE_FAILURE_STAGE=STOP_WATCHERS|              GATEWAY_REMOTE_FAILURE_STAGE=ENSURE_HOST_SWAP|              GATEWAY_REMOTE_FAILURE_STAGE=CHECK_RUNTIME_IMAGE|              GATEWAY_REMOTE_FAILURE_STAGE=CHECK_2FA_BIND_MOUNT|              GATEWAY_REMOTE_FAILURE_STAGE=REFRESH_2FA_BIND_MOUNT|              GATEWAY_REMOTE_FAILURE_STAGE=RECOVER_GATEWAY|              GATEWAY_REMOTE_FAILURE_STAGE=RESTORE_WATCHERS|              GATEWAY_REMOTE_FAILURE_STAGE=REPORT_RUNTIME_STATUS)
+              GATEWAY_REMOTE_FAILURE_STAGE=LOAD_RUNTIME_ENV|              GATEWAY_REMOTE_FAILURE_STAGE=ARM_WATCHER_FAILSAFE|              GATEWAY_REMOTE_FAILURE_STAGE=STOP_WATCHERS|              GATEWAY_REMOTE_FAILURE_STAGE=ENSURE_HOST_SWAP|              GATEWAY_REMOTE_FAILURE_STAGE=CHECK_RUNTIME_IMAGE|              GATEWAY_REMOTE_FAILURE_STAGE=CHECK_2FA_BIND_MOUNT|              GATEWAY_REMOTE_FAILURE_STAGE=REFRESH_2FA_BIND_MOUNT|              GATEWAY_REMOTE_FAILURE_STAGE=RECOVER_GATEWAY|              GATEWAY_REMOTE_FAILURE_STAGE=RESTORE_WATCHERS|              GATEWAY_REMOTE_FAILURE_STAGE=REPORT_RUNTIME_STATUS|              GATEWAY_REMOTE_FAILURE_STAGE=MANUAL_PREPARE)
                 log_step "${remote_stage}"
                 ;;
               *)
@@ -1029,6 +1067,10 @@ jobs:
             remote_deploy_reached_host=false
             command_log="$(mktemp)"
             if gcloud compute ssh "${REMOTE_TARGET}" "${SSH_FLAGS[@]}" --command "${REMOTE_DEPLOY_COMMAND}" >"${command_log}" 2>&1; then
+              if grep -Fxq 'GATEWAY_MANUAL_AUTH_REQUIRED=true' "${command_log}"; then
+                log_step "GATEWAY_MANUAL_AUTH_REQUIRED=true; broker authentication and API readiness remain unverified"
+                echo "Gateway container started; human broker authentication and API/account checks remain required." >> "${GITHUB_STEP_SUMMARY}"
+              fi
               rm -f "${command_log}"
               return 0
             fi

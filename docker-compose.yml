@@ -22,7 +22,7 @@ services:
       - EXISTING_SESSION_DETECTED_ACTION=${EXISTING_SESSION_DETECTED_ACTION:-primary}
       # Set to no when IBC should use IBKR Mobile push approval instead of
       # the local TOTP auto-fill helper.
-      - IBKR_2FA_AUTOFILL=${IBKR_2FA_AUTOFILL:-yes}
+      - IBKR_2FA_AUTOFILL=${IBKR_2FA_AUTOFILL:-no}
       - IBKR_2FA_MAX_SUBMISSIONS=${IBKR_2FA_MAX_SUBMISSIONS:-1}
       # e2-micro has less than 1 GiB RAM. The upstream image defaults to
       # -Xmx768m, which can starve sshd/Docker/guest-agent. Keep this

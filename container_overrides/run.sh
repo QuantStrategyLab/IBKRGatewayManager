@@ -17,6 +17,9 @@ stop_ibc() {
 		echo ".> Stopping x11vnc."
 		pkill x11vnc
 	fi
+	if [ -n "${VNC_PASSFILE:-}" ]; then
+		rm -f -- "$VNC_PASSFILE"
+	fi
 
 	echo ".> Stopping Xvfb."
 	pkill Xvfb
@@ -53,9 +56,12 @@ start_vnc() {
 	file_env 'VNC_SERVER_PASSWORD'
 	if [ -n "$VNC_SERVER_PASSWORD" ]; then
 		echo ".> Starting VNC server"
-		x11vnc -display "$DISPLAY" -forever -shared -bg -noipv6 \
+		VNC_PASSFILE="$(mktemp /dev/shm/ibkr-vnc-pass.XXXXXX)"
+		printf '%s\n' "$VNC_SERVER_PASSWORD" > "$VNC_PASSFILE"
+		env -u VNC_SERVER_PASSWORD -u TWS_PASSWORD -u TWS_USERID -u TOTP_SECRET \
+			x11vnc -display "$DISPLAY" -forever -shared -bg -noipv6 \
 			-ncache_cr -noxdamage \
-			-passwd "$VNC_SERVER_PASSWORD" &
+			-passwdfile "$VNC_PASSFILE" &
 		unset_env 'VNC_SERVER_PASSWORD'
 	else
 		echo ".> VNC server disabled"
