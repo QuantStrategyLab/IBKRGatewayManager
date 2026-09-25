@@ -31,6 +31,8 @@ It supports the system but does not decide which strategy should be live. Strate
 
 Deployment workflows require the repository-level Actions variable `IB_GATEWAY_TARGETS_JSON`. It is a JSON object keyed by a non-sensitive target label (or a list whose entries include `name`). Every target supplies its own GCP project, Workload Identity provider, service account, VM location, and deployment settings. The repository has no default gateway or cloud account.
 
+Setting `maintenance_enabled=false` for a target pauses scheduled redeployment only; it does not disable the Gateway health and 2FA timers already installed on the VM. A scheduled workflow can succeed when every target was skipped, so its result does not verify the Gateway API, login, or account identity. Use the read-only diagnostics and separate account-level evidence; do not enable scheduled redeployment just to obtain a green workflow.
+
 ```json
 {
   "gateway-a": {

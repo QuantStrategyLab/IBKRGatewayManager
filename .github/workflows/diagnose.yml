@@ -330,7 +330,8 @@ jobs:
           sudo journalctl -u ibkr-2fa-bot.service -n 100 --no-pager || true
 
           section "container processes"
-          sudo docker exec "$CONTAINER_NAME" bash -lc 'pgrep -a -f "2fa_bot.py|ibgateway|socat|Xvfb|x11vnc|ibcstart" || true' || true
+          # Full process arguments may contain license or authentication material.
+          sudo docker exec "$CONTAINER_NAME" ps -eo pid=,comm= || true
 
           section "container listening ports"
           sudo docker exec "$CONTAINER_NAME" bash -lc 'ss -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || netstat -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || true' || true

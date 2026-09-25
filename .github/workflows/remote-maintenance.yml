@@ -287,7 +287,8 @@ jobs:
           resolve_ibkr_gateway_unit_names "${container_name}" "${unit_suffix}"
           sudo docker compose ps
           sudo systemctl status "${IBKR_GATEWAY_HEALTHCHECK_TIMER}" "${IBKR_GATEWAY_DAILY_RESTART_TIMER}" "${IBKR_2FA_BOT_TIMER}" --no-pager || true
-          sudo docker exec "${container_name}" pgrep -a -f "2fa_bot.py|ibgateway|socat|Xvfb|x11vnc|ibcstart" 2>/dev/null || true
+          # Full process arguments may contain license or authentication material.
+          sudo docker exec "${container_name}" ps -eo pid=,comm= 2>/dev/null || true
           sudo docker exec "${container_name}" bash -lc 'ss -ltnp 2>/dev/null | grep -E ":(4001|4002|4003|4004|5900)\b" || true' || true
           sudo docker exec "${container_name}" tail -n 80 /home/ibgateway/2fa.log 2>/dev/null || true
           EOF
