@@ -31,6 +31,8 @@ IBKRGatewayManager 是 QuantStrategyLab 的IBKR Gateway 运维工具。管理 IB
 
 部署 workflow 必须使用仓库级 Actions variable `IB_GATEWAY_TARGETS_JSON`。它是以非敏感目标标签为 key 的 JSON object（或每项包含 `name` 的 list）。每个目标自行提供 GCP project、Workload Identity provider、service account、VM 位置和部署参数；仓库中没有默认 gateway 或云账号。
 
+目标的 `maintenance_enabled=false` 仅暂停定时重新部署，不会关闭 VM 上已安装的 Gateway 健康与 2FA 定时器。定时 workflow 在所有目标被跳过时仍可能显示成功；该结果不代表 Gateway API、登录或账户身份已验证。需要运行只读诊断并另行核对账户级证据，不能为了获得绿色状态而重新启用定时部署。
+
 ```json
 {
   "gateway-a": {
