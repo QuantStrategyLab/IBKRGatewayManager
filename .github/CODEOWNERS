@@ -1,8 +1,15 @@
 # Gateway control, deployment, and credential-handling changes require owner visibility.
 /.github/CODEOWNERS @Pigbibi
-/.github/workflows/ @Pigbibi
 /2fa_bot.py @Pigbibi
-/Dockerfile @Pigbibi
 /docker-compose.yml @Pigbibi
 /container_overrides/ @Pigbibi
 /scripts/ @Pigbibi
+
+# Dependency paths below do not automatically request a personal review.
+# They still require scoped engineering review, passing CI, and applicable
+# compatibility/recovery evidence. Disabled generic auto-merge stays disabled.
+# This routing change grants no deployment, credential, or investment authority.
+# Engineering review scope: /.github/workflows/
+# Engineering review scope: /Dockerfile
+# Gateway dependency updates require an independently qualified AI review;
+# no automatic dependency-review consumer is claimed by this file.
