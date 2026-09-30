@@ -5,11 +5,16 @@ on:
     inputs:
       target:
         description: One gateway target from IB_GATEWAY_TARGETS_JSON
-        required: true
+        required: false
         type: string
+      match_current_gateway:
+        description: Compare the current private Gateway host against all four configured targets
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
-  group: read-only-gateway-vm-metadata-${{ github.event.inputs.target }}
+  group: read-only-gateway-vm-metadata-${{ inputs.match_current_gateway && 'match-current' || inputs.target }}
   cancel-in-progress: false
 
 jobs:
@@ -20,19 +25,52 @@ jobs:
     steps:
       - id: resolve
         name: Resolve one gateway target
+        env:
+          MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
+          MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
+          LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
+          SELECTED_TARGET: ${{ inputs.target }}
         uses: actions/github-script@v8
         with:
           script: |
-            const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};
+            const matchMode = process.env.MATCH_CURRENT_GATEWAY === "true";
+            const raw = matchMode ? process.env.MATCH_TARGETS_JSON : process.env.LEGACY_TARGETS_JSON;
             if (!raw || !raw.trim()) {
-              core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
+              core.setFailed(matchMode ? "Protected gateway target inventory is required" : "IB_GATEWAY_TARGETS_JSON is required");
               return;
             }
-            const loaded = JSON.parse(raw);
-            const targets = Array.isArray(loaded)
-              ? loaded
-              : Object.entries(loaded).map(([name, config]) => ({...config, name}));
-            const selectedName = ${{ toJSON(github.event.inputs.target) }};
+            let loaded;
+            let targets;
+            try {
+              loaded = JSON.parse(raw);
+              targets = Array.isArray(loaded)
+                ? loaded
+                : Object.entries(loaded).map(([name, config]) => ({...config, name}));
+            } catch {
+              core.setFailed(matchMode ? "Protected gateway target inventory is invalid" : "IB_GATEWAY_TARGETS_JSON is invalid");
+              return;
+            }
+            if (matchMode) {
+              const required = [
+                "gcp_project_id",
+                "gcp_workload_identity_provider",
+                "gcp_workload_identity_service_account",
+                "gce_instance_name",
+                "gce_zone",
+              ];
+              const names = new Set();
+              if (targets.length !== 4 || targets.some((target) => {
+                if (!target || typeof target.name !== "string" || !target.name.trim() || names.has(target.name)) return true;
+                names.add(target.name);
+                return required.some((key) => typeof target[key] !== "string" || !target[key].trim());
+              })) {
+                core.setFailed("Protected gateway target inventory is invalid");
+                return;
+              }
+              core.setOutput("matrix", JSON.stringify({include: targets.map((_, target_index) => ({target_index}))}));
+              return;
+            }
+            const selectedName = process.env.SELECTED_TARGET;
             const targetIndex = targets.findIndex((target) => target && target.name === selectedName);
             if (targetIndex < 0) {
               core.setFailed("Unknown gateway target; choose one configured target");
@@ -50,6 +88,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
+      fail-fast: true
+      max-parallel: 1
       matrix: ${{ fromJson(needs.resolve.outputs.matrix) }}
     permissions:
       contents: read
@@ -62,18 +102,63 @@ jobs:
 
       - id: metadata
         name: Resolve masked VM metadata
+        env:
+          MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
+          MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
+          LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
+          SELECTED_TARGET: ${{ inputs.target }}
+          TARGET_INDEX: ${{ matrix.target_index }}
+          TARGET_DIGEST: ${{ matrix.target_digest }}
         uses: actions/github-script@v8
         with:
           script: |
-            const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};
-            const loaded = JSON.parse(raw);
-            const targets = Array.isArray(loaded)
-              ? loaded
-              : Object.entries(loaded).map(([name, config]) => ({...config, name}));
-            const target = targets[Number(${{ toJSON(matrix.target_index) }})];
-            const crypto = require("crypto");
-            if (!target || crypto.createHash("sha256").update(JSON.stringify(target)).digest("hex") !== ${{ toJSON(matrix.target_digest) }}) {
-              core.setFailed("Resolved gateway target changed between jobs");
+            const matchMode = process.env.MATCH_CURRENT_GATEWAY === "true";
+            const raw = matchMode ? process.env.MATCH_TARGETS_JSON : process.env.LEGACY_TARGETS_JSON;
+            if (!raw || !raw.trim()) {
+              core.setFailed(matchMode ? "Protected gateway target inventory is required" : "IB_GATEWAY_TARGETS_JSON is required");
+              return;
+            }
+            let loaded;
+            let targets;
+            try {
+              loaded = JSON.parse(raw);
+              targets = Array.isArray(loaded)
+                ? loaded
+                : Object.entries(loaded).map(([name, config]) => ({...config, name}));
+            } catch {
+              core.setFailed(matchMode ? "Protected gateway target inventory is invalid" : "IB_GATEWAY_TARGETS_JSON is invalid");
+              return;
+            }
+            const targetIndex = Number(process.env.TARGET_INDEX);
+            let target;
+            if (matchMode) {
+              const required = [
+                "gcp_project_id",
+                "gcp_workload_identity_provider",
+                "gcp_workload_identity_service_account",
+                "gce_instance_name",
+                "gce_zone",
+              ];
+              const names = new Set();
+              if (targets.length !== 4 || targets.some((item) => {
+                if (!item || typeof item.name !== "string" || !item.name.trim() || names.has(item.name)) return true;
+                names.add(item.name);
+                return required.some((key) => typeof item[key] !== "string" || !item[key].trim());
+              })) {
+                core.setFailed("Protected gateway target inventory is invalid");
+                return;
+              }
+              target = targets[targetIndex];
+            } else {
+              target = targets[targetIndex];
+              const crypto = require("crypto");
+              if (!target || crypto.createHash("sha256").update(JSON.stringify(target)).digest("hex") !== process.env.TARGET_DIGEST) {
+                core.setFailed("Resolved gateway target changed between jobs");
+                return;
+              }
+            }
+            if (!target || !Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex >= targets.length) {
+              core.setFailed("Resolved gateway target is invalid");
               return;
             }
             const values = {
@@ -95,6 +180,8 @@ jobs:
                 core.exportVariable(name, String(value));
               }
             }
+            core.exportVariable("MATCH_CURRENT_GATEWAY", matchMode ? "true" : "false");
+            core.exportVariable("TARGET_INDEX", String(targetIndex));
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -111,6 +198,9 @@ jobs:
       - name: Read VM metadata without connecting
         env:
           GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_project_id }}
+          MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
+          TARGET_INDEX: ${{ matrix.target_index }}
+          IB_GATEWAY_EXPECTED_HOST: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_EXPECTED_HOST || '' }}
         run: |
           set -euo pipefail
           metadata_file="$(mktemp)"
@@ -119,9 +209,21 @@ jobs:
             --project "${GCP_PROJECT_ID}" \
             --zone "${GCE_ZONE}" \
             --format=json >"${metadata_file}" 2>&1; then
+            if [ "${MATCH_CURRENT_GATEWAY}" = "true" ]; then
+              echo "GATEWAY_IP_MATCH_STATUS=unknown"
+              echo "GATEWAY_IP_MATCH_INDEX=${TARGET_INDEX}"
+              python3 scripts/classify_gcloud_metadata_failure.py --input "${metadata_file}"
+              exit 1
+            fi
             echo "GATEWAY_VM_DIAGNOSTIC_STATUS=METADATA_UNAVAILABLE"
             python3 scripts/classify_gcloud_metadata_failure.py --input "${metadata_file}"
             exit 1
+          fi
+          if [ "${MATCH_CURRENT_GATEWAY}" = "true" ]; then
+            python3 scripts/match_gateway_metadata.py \
+              --metadata-file "${metadata_file}" \
+              --target-index "${TARGET_INDEX}"
+            exit $?
           fi
           VM_METADATA_FILE="${metadata_file}" python3 - <<'PY'
           import json

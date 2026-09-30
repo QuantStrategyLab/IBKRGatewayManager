@@ -25,6 +25,8 @@ jobs:
           bash tests/test_monitor_ib_gateway_ready.sh
           bash tests/test_workflow_shared_config.sh
           bash tests/test_docker_compose_ports.sh
+          bash tests/test_read_only_vm_metadata_diagnostic.sh
+          python3 -m unittest discover -s tests -p 'test_match_gateway_metadata.py'
 
   docker-build:
     runs-on: ubuntu-latest
