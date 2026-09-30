@@ -26,7 +26,6 @@ grep -Fq 'GATEWAY_VM_DIAGNOSTIC_LIMIT=NO_GATEWAY_OR_CONTAINER_HEALTH_ASSERTION' 
 for forbidden in \
   'gcloud compute ssh' \
   'gcloud compute scp' \
-  'gcloud secrets versions' \
   'gcloud compute instances reset' \
   'docker ' \
   'systemctl ' \

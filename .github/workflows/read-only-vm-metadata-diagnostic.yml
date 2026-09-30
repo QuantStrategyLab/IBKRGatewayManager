@@ -12,6 +12,11 @@ on:
         required: true
         default: false
         type: boolean
+      inspect_connections:
+        description: Passively inspect container and socket state for the protected matched target
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: read-only-gateway-vm-metadata-${{ inputs.match_current_gateway && 'match-current' || inputs.target }}
@@ -20,20 +25,35 @@ concurrency:
 jobs:
   resolve:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       matrix: ${{ steps.resolve.outputs.matrix }}
     steps:
+      - name: Checkout protected-index parser
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
       - id: resolve
         name: Resolve one gateway target
         env:
           MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
+          INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
+          MATCHED_INDEX: ${{ inputs.inspect_connections && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
           LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
           SELECTED_TARGET: ${{ inputs.target }}
         uses: actions/github-script@v8
         with:
           script: |
+            const { parseProtectedGatewayIndex } = require(`${process.env.GITHUB_WORKSPACE}/scripts/parse_protected_gateway_index.cjs`);
             const matchMode = process.env.MATCH_CURRENT_GATEWAY === "true";
+            const inspectConnections = process.env.INSPECT_CONNECTIONS === "true";
+            if (inspectConnections && !matchMode) {
+              core.setFailed("Connection inspection requires protected current-gateway matching");
+              return;
+            }
             const raw = matchMode ? process.env.MATCH_TARGETS_JSON : process.env.LEGACY_TARGETS_JSON;
             if (!raw || !raw.trim()) {
               core.setFailed(matchMode ? "Protected gateway target inventory is required" : "IB_GATEWAY_TARGETS_JSON is required");
@@ -65,6 +85,23 @@ jobs:
                 return required.some((key) => typeof target[key] !== "string" || !target[key].trim());
               })) {
                 core.setFailed("Protected gateway target inventory is invalid");
+                return;
+              }
+              if (inspectConnections) {
+                const selectedIndex = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
+                if (selectedIndex === undefined) {
+                  core.setFailed("Protected matched target index is unavailable");
+                  return;
+                }
+                const target = targets[selectedIndex];
+                if (!target || !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(target.gce_user || "") ||
+                    !/^[A-Za-z0-9_-]+$/.test(target.ssh_private_key_secret_name || "") ||
+                    !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(target.container_name || "") ||
+                    !["paper", "live"].includes(target.mode)) {
+                  core.setFailed("Protected matched target connection configuration is incomplete");
+                  return;
+                }
+                core.setOutput("matrix", JSON.stringify({include: [{target_index: selectedIndex, inspect_connections: true}]}));
                 return;
               }
               core.setOutput("matrix", JSON.stringify({include: targets.map((_, target_index) => ({target_index}))}));
@@ -104,7 +141,9 @@ jobs:
         name: Resolve masked VM metadata
         env:
           MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
+          INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
+          MATCHED_INDEX: ${{ inputs.inspect_connections && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
           LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
           SELECTED_TARGET: ${{ inputs.target }}
           TARGET_INDEX: ${{ matrix.target_index }}
@@ -112,7 +151,9 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
+            const { parseProtectedGatewayIndex } = require(`${process.env.GITHUB_WORKSPACE}/scripts/parse_protected_gateway_index.cjs`);
             const matchMode = process.env.MATCH_CURRENT_GATEWAY === "true";
+            const inspectConnections = process.env.INSPECT_CONNECTIONS === "true";
             const raw = matchMode ? process.env.MATCH_TARGETS_JSON : process.env.LEGACY_TARGETS_JSON;
             if (!raw || !raw.trim()) {
               core.setFailed(matchMode ? "Protected gateway target inventory is required" : "IB_GATEWAY_TARGETS_JSON is required");
@@ -148,6 +189,11 @@ jobs:
                 core.setFailed("Protected gateway target inventory is invalid");
                 return;
               }
+              const matchedIndex = inspectConnections ? parseProtectedGatewayIndex(process.env.MATCHED_INDEX) : undefined;
+              if (inspectConnections && (matchedIndex === undefined || matchedIndex !== targetIndex)) {
+                core.setFailed("Protected matched target index is unavailable");
+                return;
+              }
               target = targets[targetIndex];
             } else {
               target = targets[targetIndex];
@@ -168,6 +214,34 @@ jobs:
               GCE_INSTANCE_NAME: target.gce_instance_name,
               GCE_ZONE: target.gce_zone,
             };
+            if (inspectConnections) {
+              const requiredConnectionValues = {
+                GCE_USER: target.gce_user,
+                SSH_PRIVATE_KEY_SECRET_NAME: target.ssh_private_key_secret_name,
+                IB_GATEWAY_CONTAINER_NAME: target.container_name,
+                IB_GATEWAY_MODE: target.mode,
+              };
+              if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(String(target.gcp_project_id || "")) ||
+                  !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(String(target.gcp_secret_project_id || target.gcp_project_id || "")) ||
+                  !/^[a-z]([-a-z0-9]*[a-z0-9])?$/.test(String(target.gce_instance_name || "")) ||
+                  !/^[a-z]+(?:-[a-z]+)*[0-9]+-[a-z]$/.test(String(target.gce_zone || "")) ||
+                  !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(String(requiredConnectionValues.GCE_USER || "")) ||
+                  !/^[A-Za-z0-9_-]+$/.test(String(requiredConnectionValues.SSH_PRIVATE_KEY_SECRET_NAME || "")) ||
+                  !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(String(requiredConnectionValues.IB_GATEWAY_CONTAINER_NAME || "")) ||
+                  !["paper", "live"].includes(requiredConnectionValues.IB_GATEWAY_MODE)) {
+                core.setFailed("Protected matched target connection configuration is incomplete");
+                return;
+              }
+              for (const [name, value] of Object.entries(requiredConnectionValues)) {
+                core.setSecret(String(value));
+                if (name === "SSH_PRIVATE_KEY_SECRET_NAME") core.setOutput(name.toLowerCase(), String(value));
+                else core.exportVariable(name, String(value));
+              }
+              // Match the existing Gateway mode contract in scripts/wait_for_ib_gateway_ready.sh.
+              core.exportVariable("IB_GATEWAY_API_PORT", requiredConnectionValues.IB_GATEWAY_MODE === "live" ? "4001" : "4002");
+              core.setSecret(String(target.gcp_secret_project_id || target.gcp_project_id));
+              core.setOutput("gcp_secret_project_id", String(target.gcp_secret_project_id || target.gcp_project_id));
+            }
             for (const [name, value] of Object.entries(values)) {
               if (!value) {
                 core.setFailed("Gateway metadata is incomplete");
@@ -183,21 +257,55 @@ jobs:
             core.exportVariable("MATCH_CURRENT_GATEWAY", matchMode ? "true" : "false");
             core.exportVariable("TARGET_INDEX", String(targetIndex));
 
-      - name: Authenticate to Google Cloud
+      - id: auth_filtered
+        name: Authenticate to Google Cloud for passive inspection
+        if: ${{ inputs.inspect_connections }}
+        continue-on-error: true
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}
+          service_account: ${{ steps.metadata.outputs.gcp_workload_identity_service_account }}
+        env:
+          NODE_OPTIONS: --require=${{ github.workspace }}/scripts/filter_github_action_auth_logs.cjs
+
+      - id: auth
+        name: Authenticate to Google Cloud
+        if: ${{ !inputs.inspect_connections }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}
           service_account: ${{ steps.metadata.outputs.gcp_workload_identity_service_account }}
 
       - name: Set up gcloud
+        if: ${{ !inputs.inspect_connections }}
+        id: gcloud_setup
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ steps.metadata.outputs.gcp_project_id }}
           version: '>= 416.0.0'
 
-      - name: Read VM metadata without connecting
+      - name: Set up gcloud for passive inspection
+        if: ${{ inputs.inspect_connections && steps.auth_filtered.outcome == 'success' }}
+        id: gcloud_setup_filtered
+        continue-on-error: true
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ steps.metadata.outputs.gcp_project_id }}
+          version: '>= 416.0.0'
+        env:
+          NODE_OPTIONS: --require=${{ github.workspace }}/scripts/filter_github_action_auth_logs.cjs
+
+      - name: Stop if protected cloud access is unavailable
+        if: ${{ inputs.inspect_connections && (steps.auth_filtered.outcome != 'success' || steps.gcloud_setup_filtered.outcome != 'success') }}
+        run: |
+          echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=cloud_access_unavailable"
+          exit 1
+
+      - id: metadata_check
+        name: Read VM metadata without connecting
         env:
           GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_project_id }}
+          INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
           MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
           TARGET_INDEX: ${{ matrix.target_index }}
           IB_GATEWAY_EXPECTED_HOST: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_EXPECTED_HOST || '' }}
@@ -220,10 +328,21 @@ jobs:
             exit 1
           fi
           if [ "${MATCH_CURRENT_GATEWAY}" = "true" ]; then
-            python3 scripts/match_gateway_metadata.py \
+            if match_output="$(python3 scripts/match_gateway_metadata.py \
               --metadata-file "${metadata_file}" \
-              --target-index "${TARGET_INDEX}"
-            exit $?
+              --target-index "${TARGET_INDEX}")"; then
+              match_exit=0
+            else
+              match_exit=$?
+            fi
+            printf '%s\n' "${match_output}"
+            match_status="$(printf '%s\n' "${match_output}" | sed -n 's/^GATEWAY_IP_MATCH_STATUS=//p')"
+            printf 'gateway_ip_match_status=%s\n' "${match_status}" >> "${GITHUB_OUTPUT}"
+            if [ "${INSPECT_CONNECTIONS}" = "true" ] && [ "${match_status}" != "match" ]; then
+              echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=metadata_mismatch"
+              exit 1
+            fi
+            exit "${match_exit}"
           fi
           VM_METADATA_FILE="${metadata_file}" python3 - <<'PY'
           import json
@@ -237,3 +356,108 @@ jobs:
               print("GATEWAY_VM_DIAGNOSTIC_STATUS=VM_NOT_RUNNING")
           print("GATEWAY_VM_DIAGNOSTIC_LIMIT=NO_GATEWAY_OR_CONTAINER_HEALTH_ASSERTION")
           PY
+
+      - name: Read SSH key into a restricted temporary file
+        if: ${{ inputs.inspect_connections && steps.metadata_check.outputs.gateway_ip_match_status == 'match' }}
+        env:
+          SSH_PRIVATE_KEY_SECRET_NAME: ${{ steps.metadata.outputs.ssh_private_key_secret_name }}
+          GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_secret_project_id }}
+        run: |
+          set -euo pipefail
+          key_file="$(mktemp "${RUNNER_TEMP}/gateway-ssh-key.XXXXXX")"
+          error_file="$(mktemp "${RUNNER_TEMP}/gateway-secret-error.XXXXXX")"
+          key_handed_off=false
+          cleanup_secret_fetch() {
+            rm -f "${error_file}"
+            if [ "${key_handed_off}" != "true" ]; then rm -f "${key_file}"; fi
+          }
+          trap cleanup_secret_fetch EXIT
+          echo "SSH_KEY_FILE=${key_file}" >> "${GITHUB_ENV}"
+          chmod 600 "${key_file}"
+          if ! gcloud secrets versions access latest \
+            --secret="${SSH_PRIVATE_KEY_SECRET_NAME}" \
+            --project="${GCP_PROJECT_ID}" >"${key_file}" 2>"${error_file}"; then
+            echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=credential_unavailable"
+            exit 1
+          fi
+          if [ ! -s "${key_file}" ]; then
+            echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=credential_unavailable"
+            exit 1
+          fi
+          chmod 600 "${key_file}"
+          key_handed_off=true
+
+      - name: Inspect Gateway connections through one IAP SSH session
+        if: ${{ inputs.inspect_connections && steps.metadata_check.outputs.gateway_ip_match_status == 'match' }}
+        env:
+          GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_project_id }}
+          TARGET_INDEX: ${{ matrix.target_index }}
+        run: |
+          set -euo pipefail
+          known_hosts="$(mktemp "${RUNNER_TEMP}/gateway-known-hosts.XXXXXX")"
+          output_file="$(mktemp "${RUNNER_TEMP}/gateway-inspection-output.XXXXXX")"
+          error_file="$(mktemp "${RUNNER_TEMP}/gateway-ssh-error.XXXXXX")"
+          trap 'rm -f "${known_hosts}" "${output_file}" "${error_file}" "${SSH_KEY_FILE}"' EXIT
+          chmod 600 "${known_hosts}" "${output_file}" "${error_file}"
+          target_alias="gateway-target-${TARGET_INDEX}"
+          # The temporary SSH host-key record is bound to this exact IAP target alias.
+          proxy_command="gcloud compute start-iap-tunnel '${GCE_INSTANCE_NAME}' 22 --listen-on-stdin --project='${GCP_PROJECT_ID}' --zone='${GCE_ZONE}' --quiet"
+          remote_command="bash -s -- '${IB_GATEWAY_CONTAINER_NAME}' '${IB_GATEWAY_API_PORT}'"
+          if timeout 75 ssh \
+            -i "${SSH_KEY_FILE}" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectionAttempts=1 \
+            -o ConnectTimeout=20 \
+            -o StrictHostKeyChecking=accept-new \
+            -o "UserKnownHostsFile=${known_hosts}" \
+            -o "HostKeyAlias=${target_alias}" \
+            -o "ProxyCommand=${proxy_command}" \
+            "${GCE_USER}@${target_alias}" "${remote_command}" \
+            < scripts/inspect_gateway_connections.sh >"${output_file}" 2>"${error_file}"; then
+            ssh_status=0
+          else
+            ssh_status=$?
+          fi
+          python3 - "${output_file}" "${ssh_status}" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+          ssh_status = int(sys.argv[2])
+          if len(lines) == 1 and re.fullmatch(r"GATEWAY_CONNECTION_INSPECTION=blocked reason=[a-z_]+", lines[0]):
+              print(lines[0])
+              raise SystemExit(1)
+          patterns = {
+              "GATEWAY_CONNECTION_INSPECTION": r"GATEWAY_CONNECTION_INSPECTION=observed",
+              "GATEWAY_CONTAINER_RUNNING": r"GATEWAY_CONTAINER_RUNNING=(true|false)",
+              "GATEWAY_API_LISTENER": r"GATEWAY_API_LISTENER=(true|false)",
+              "GATEWAY_ESTABLISHED_CONNECTION_COUNT": r"GATEWAY_ESTABLISHED_CONNECTION_COUNT=[0-9]+",
+              "GATEWAY_CONNECTION_OBSERVED_AT_UTC": r"GATEWAY_CONNECTION_OBSERVED_AT_UTC=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z",
+              "GATEWAY_CONNECTION_INSPECTION_LIMIT": r"GATEWAY_CONNECTION_INSPECTION_LIMIT=OBSERVATION_ONLY_NO_AUTH_OR_CONCURRENCY_ASSERTION",
+          }
+          names = [line.split("=", 1)[0] for line in lines]
+          if ssh_status != 0:
+              print("GATEWAY_CONNECTION_INSPECTION=blocked reason=ssh_unavailable")
+              raise SystemExit(1)
+          if len(lines) != len(patterns) or set(names) != set(patterns) or len(set(names)) != len(names) or any(
+              not re.fullmatch(patterns.get(name, ""), line) for name, line in zip(names, lines)
+          ):
+              print("GATEWAY_CONNECTION_INSPECTION=blocked reason=remote_response_invalid")
+              raise SystemExit(1)
+          for line in lines:
+              print(line)
+          PY
+
+      - name: Remove temporary SSH key
+        if: ${{ always() && inputs.inspect_connections }}
+        env:
+          SSH_KEY_FILE: ${{ env.SSH_KEY_FILE }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SSH_KEY_FILE:-}" ]; then rm -f -- "${SSH_KEY_FILE}"; fi
+          for key_file in "${RUNNER_TEMP}"/gateway-ssh-key.*; do
+            [ -e "${key_file}" ] || continue
+            rm -f -- "${key_file}"
+          done
