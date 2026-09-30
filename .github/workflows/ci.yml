@@ -26,6 +26,10 @@ jobs:
           bash tests/test_workflow_shared_config.sh
           bash tests/test_docker_compose_ports.sh
           bash tests/test_read_only_vm_metadata_diagnostic.sh
+          bash tests/test_inspect_gateway_connections.sh
+          node tests/test_filter_github_action_auth_logs.cjs
+          node tests/test_parse_protected_gateway_index.cjs
+          node tests/test_gateway_workflow_resolve.cjs
           python3 -m unittest discover -s tests -p 'test_match_gateway_metadata.py'
 
   docker-build:
