@@ -64,6 +64,8 @@ When moving a VM to another project, optional `gcp_secret_project_id` keeps Secr
 
 Project and instance names work for IAP administration, and a platform service can reach the Gateway over the VPC's internal address. The Gateway VM still needs a separate route to IBKR on the public internet. Removing its external IP requires another outbound route, such as Cloud NAT, with its own charges.
 
+The manual read-only metadata workflow can optionally compare the protected target's SSH key with instance/project SSH-key metadata. Enable `inspect_ssh_key_binding` only together with `match_current_gateway` and `inspect_ssh_policy`; leave `inspect_connections` off. It reports only a fixed match, no-match, or unknown result, never opens SSH, and does not establish guest-side SSH health. OS Login makes metadata-key comparison unknown; a no-match does not prove the Gateway is unreachable.
+
 ## Repository layout
 
 - `tests/`: unit, contract, and regression tests.
