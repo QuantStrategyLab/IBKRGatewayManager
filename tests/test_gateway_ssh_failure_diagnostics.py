@@ -88,6 +88,36 @@ class GatewaySshFailureDiagnosticsTests(unittest.TestCase):
         self.assertTrue(check.stdout.startswith("ssh-ed25519 "))
         self.assertNotIn("PRIVATE KEY", result.stdout + result.stderr)
 
+    def test_crlf_key_without_final_lf_is_repaired_without_changing_public_key(self) -> None:
+        key_file = self.tmp_path / "private-key-no-eof-lf"
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key_file)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        expected_public_key = key_file.with_suffix(key_file.suffix + ".pub").read_text(encoding="utf-8").split()[:2]
+        key_file.with_suffix(key_file.suffix + ".pub").unlink()
+        original = key_file.read_bytes()
+        key_file.write_bytes(original.replace(b"\n", b"\r\n").rstrip(b"\r\n"))
+
+        result = _prepare_key(key_file, self.tmp_path)
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "GATEWAY_SSH_KEY_STATUS=ready\n")
+        self.assertEqual(result.stderr, "")
+        normalized = key_file.read_bytes()
+        self.assertNotIn(b"\r", normalized)
+        self.assertTrue(normalized.endswith(b"\n"))
+        derived = subprocess.run(
+            ["ssh-keygen", "-y", "-P", "", "-f", str(key_file)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split()[:2]
+        self.assertEqual(derived, expected_public_key)
+        self.assertNotIn(expected_public_key[1], result.stdout + result.stderr)
+
     def test_invalid_and_encrypted_keys_fail_closed_and_are_removed(self) -> None:
         runner_temp = self.tmp_path / "runner-temp"
         runner_temp.mkdir()

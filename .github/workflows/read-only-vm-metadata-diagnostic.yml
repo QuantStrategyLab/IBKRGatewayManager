@@ -542,6 +542,33 @@ jobs:
               echo "SSH_KEY_BINDING_REASON=key_unavailable"
               exit 1
             fi
+            if ! key_eol_status="$(python3 - "${key_file}" 2>/dev/null <<'PY'
+          import sys
+
+          try:
+              with open(sys.argv[1], "rb") as key_file:
+                  key_file.seek(0, 2)
+                  if key_file.tell() == 0:
+                      raise OSError
+                  key_file.seek(-1, 2)
+                  print("present" if key_file.read(1) == b"\n" else "missing")
+          except OSError:
+              print("unknown")
+              raise SystemExit(1)
+          PY
+          )"; then
+              key_eol_status="unknown"
+            fi
+            case "${key_eol_status}" in
+              present|missing) echo "SSH_KEY_INPUT_EOL=${key_eol_status}" ;;
+              *)
+                echo "SSH_KEY_INPUT_EOL=unknown"
+                echo "SSH_KEY_BINDING=unknown"
+                echo "SSH_KEY_BINDING_SOURCE=unknown"
+                echo "SSH_KEY_BINDING_REASON=inspection_failed"
+                exit 1
+                ;;
+            esac
             if ! SSH_KEY_FILE="${key_file}" bash scripts/prepare_gateway_ssh_key.sh >/dev/null 2>"${error_file}"; then
               echo "SSH_KEY_BINDING=unknown"
               echo "SSH_KEY_BINDING_SOURCE=unknown"

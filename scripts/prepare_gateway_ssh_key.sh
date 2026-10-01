@@ -28,6 +28,23 @@ if ! tr -d '\r' <"${key_file}" >"${normalized_file}" 2>/dev/null || [[ ! -s "${n
   echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=credential_invalid"
   exit 1
 fi
+if ! python3 - "${normalized_file}" >/dev/null 2>&1 <<'PY'
+import sys
+
+with open(sys.argv[1], "r+b") as key_stream:
+    key_stream.seek(0, 2)
+    if key_stream.tell() == 0:
+        raise ValueError("empty normalized key")
+    key_stream.seek(-1, 2)
+    if key_stream.read(1) != b"\n":
+        key_stream.seek(0, 2)
+        key_stream.write(b"\n")
+PY
+then
+  rm -f -- "${key_file}" 2>/dev/null || true
+  echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=credential_invalid"
+  exit 1
+fi
 if ! ssh-keygen -y -P '' -f "${normalized_file}" >/dev/null 2>/dev/null; then
   rm -f -- "${key_file}" 2>/dev/null || true
   echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=credential_invalid"
