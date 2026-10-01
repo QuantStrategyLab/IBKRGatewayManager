@@ -5,10 +5,12 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import textwrap
 import unittest
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -287,7 +289,7 @@ class GatewaySshKeyBindingTests(unittest.TestCase):
 
     def _run_embedded_policy_step(
         self, *, response_ip: str = "10.20.30.40", project_failure: bool = False,
-        secret_failure: bool = False, crlf_key: bool = False
+        secret_failure: bool = False, crlf_key: bool = False, eol_check_failure: bool = False
     ) -> tuple[subprocess.CompletedProcess[str], list[str], list[str]]:
         workspace = Path(tempfile.mkdtemp(dir=self.root))
         bin_dir = workspace / "bin"
@@ -321,9 +323,24 @@ class GatewaySshKeyBindingTests(unittest.TestCase):
             encoding="utf-8",
         )
         fake_gcloud.chmod(0o700)
+        if eol_check_failure:
+            fake_python = bin_dir / "python3"
+            fake_python.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [ \"${1:-}\" = \"-\" ]; then\n"
+                "  printf 'synthetic-eol-output-marker\\n'\n"
+                "  printf 'synthetic-eol-error-marker\\n' >&2\n"
+                "  exit 31\n"
+                "fi\n"
+                f"exec {shlex.quote(sys.executable)} \"$@\"\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o700)
         fake_key = workspace / "synthetic-source-key"
         key_bytes = self.key_path.read_bytes()
-        fake_key.write_bytes(key_bytes.replace(b"\n", b"\r\n") if crlf_key else key_bytes)
+        fake_key.write_bytes(
+            key_bytes.replace(b"\n", b"\r\n").rstrip(b"\r\n") if crlf_key else key_bytes
+        )
         env = {
             **os.environ,
             "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
@@ -357,6 +374,7 @@ class GatewaySshKeyBindingTests(unittest.TestCase):
     def test_embedded_policy_step_fetches_one_secret_only_after_host_binding_and_cleans_up(self) -> None:
         result, calls, leftovers = self._run_embedded_policy_step(crlf_key=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SSH_KEY_INPUT_EOL=missing", result.stdout)
         self.assertIn("SSH_KEY_BINDING=match\nSSH_KEY_BINDING_SOURCE=instance\nSSH_KEY_BINDING_REASON=matched", result.stdout)
         self.assertEqual(calls, ["compute instances describe", "compute project-info describe", "secrets versions access"])
         self.assertEqual(leftovers, [])
@@ -364,6 +382,24 @@ class GatewaySshKeyBindingTests(unittest.TestCase):
         self.assertNotIn("synthetic-user", result.stdout + result.stderr)
         self.assertNotIn("synthetic-secret-name", result.stdout + result.stderr)
         self.assertFalse(any("ssh " in call or "start-iap-tunnel" in call for call in calls))
+
+    def test_embedded_policy_step_reports_present_eof_newline(self) -> None:
+        result, calls, leftovers = self._run_embedded_policy_step()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SSH_KEY_INPUT_EOL=present", result.stdout)
+        self.assertEqual(calls, ["compute instances describe", "compute project-info describe", "secrets versions access"])
+        self.assertEqual(leftovers, [])
+
+    def test_eof_diagnostic_failure_is_fixed_and_stops_before_key_preparation(self) -> None:
+        result, calls, leftovers = self._run_embedded_policy_step(eol_check_failure=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SSH_KEY_INPUT_EOL=unknown", result.stdout)
+        self.assertIn("SSH_KEY_BINDING=unknown", result.stdout)
+        self.assertIn("SSH_KEY_BINDING_REASON=inspection_failed", result.stdout)
+        self.assertNotIn("synthetic-eol-output-marker", result.stdout + result.stderr)
+        self.assertNotIn("synthetic-eol-error-marker", result.stdout + result.stderr)
+        self.assertEqual(calls, ["compute instances describe", "compute project-info describe", "secrets versions access"])
+        self.assertEqual(leftovers, [])
 
     def test_secret_failure_is_single_attempt_redacted_and_cleans_up(self) -> None:
         result, calls, leftovers = self._run_embedded_policy_step(secret_failure=True)
