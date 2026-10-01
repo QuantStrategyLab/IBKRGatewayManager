@@ -48,7 +48,7 @@ grep -Fq "LEGACY_TARGETS_JSON: \${{ !inputs.match_current_gateway && vars.IB_GAT
 grep -Fq "IB_GATEWAY_EXPECTED_HOST: \${{ inputs.match_current_gateway && !inputs.remaining_gateways && secrets.IB_GATEWAY_EXPECTED_HOST || '' }}" "$workflow_file"
 grep -Fq 'fail-fast: ${{ !inputs.remaining_gateways }}' "$workflow_file"
 grep -Fq 'max-parallel: ${{ inputs.remaining_gateways && 3 || 1 }}' "$workflow_file"
-grep -Fq 'Remaining gateway metadata inspection requires protected match-only mode' "$workflow_file"
+grep -Fq 'Remaining gateway inspection requires protected metadata or passive-connection mode' "$workflow_file"
 grep -Fq 'Resolved gateway target is not an eligible remaining target' "$workflow_file"
 grep -Fq -- '--verify-target-identity' "$workflow_file"
 grep -Fq 'GATEWAY_VM_DIAGNOSTIC_TARGET_INDEX=' "$workflow_file"

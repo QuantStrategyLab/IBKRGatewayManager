@@ -151,14 +151,43 @@ for (const matchedIndex of ['', 'bad', '{"target_index":4}', '1']) {
 
 for (const invalidMode of [
   { MATCH_CURRENT_GATEWAY: 'false', INSPECT_CONNECTIONS: 'false', INSPECT_SSH_POLICY: 'false', REMAINING_GATEWAYS: 'true' },
-  { MATCH_CURRENT_GATEWAY: 'true', INSPECT_CONNECTIONS: 'true', INSPECT_SSH_POLICY: 'false', REMAINING_GATEWAYS: 'true' },
   { MATCH_CURRENT_GATEWAY: 'true', INSPECT_CONNECTIONS: 'false', INSPECT_SSH_POLICY: 'true', REMAINING_GATEWAYS: 'true' },
   { MATCH_CURRENT_GATEWAY: 'true', INSPECT_CONNECTIONS: 'false', INSPECT_SSH_POLICY: 'false', INSPECT_SSH_KEY_BINDING: 'true', REMAINING_GATEWAYS: 'true' },
 ]) {
   const remaining = runResolve({ ...invalidMode, MATCH_TARGETS_JSON: JSON.stringify(targets), MATCHED_INDEX: '{"target_index":2}' });
-  assert.equal(remaining.failure, 'Remaining gateway metadata inspection requires protected match-only mode');
+  assert.equal(remaining.failure, 'Remaining gateway inspection requires protected metadata or passive-connection mode');
   assert.equal(remaining.outputs.matrix, undefined);
 }
+
+const remainingConnections = runResolve({
+  MATCH_CURRENT_GATEWAY: 'true',
+  INSPECT_CONNECTIONS: 'true',
+  INSPECT_SSH_POLICY: 'false',
+  INSPECT_SSH_KEY_BINDING: 'false',
+  REMAINING_GATEWAYS: 'true',
+  MATCH_TARGETS_JSON: JSON.stringify(targets),
+  MATCHED_INDEX: '{"target_index":2}',
+});
+assert.equal(remainingConnections.failure, null);
+assert.deepEqual(JSON.parse(remainingConnections.outputs.matrix).include, [
+  { target_index: 0, inspect_connections: true, inspect_ssh_policy: false },
+  { target_index: 1, inspect_connections: true, inspect_ssh_policy: false },
+  { target_index: 3, inspect_connections: true, inspect_ssh_policy: false },
+]);
+
+const missingRemainingConnectionConfig = runResolve({
+  MATCH_CURRENT_GATEWAY: 'true',
+  INSPECT_CONNECTIONS: 'true',
+  INSPECT_SSH_POLICY: 'false',
+  INSPECT_SSH_KEY_BINDING: 'false',
+  REMAINING_GATEWAYS: 'true',
+  MATCH_TARGETS_JSON: JSON.stringify(targets.map((target, index) => index === 1
+    ? (({ ssh_private_key_secret_name, ...rest }) => rest)(target)
+    : target)),
+  MATCHED_INDEX: '{"target_index":2}',
+});
+assert.equal(missingRemainingConnectionConfig.failure, 'Protected remaining target connection configuration is incomplete');
+assert.equal(missingRemainingConnectionConfig.outputs.matrix, undefined);
 
 const remainingDiagnose = runMetadataResolve({
   MATCH_CURRENT_GATEWAY: 'true',
@@ -192,7 +221,36 @@ const combinedDiagnose = runMetadataResolve({
   MATCHED_INDEX: '{"target_index":2}',
   TARGET_INDEX: '1',
 });
-assert.equal(combinedDiagnose.failure, 'Remaining gateway metadata inspection requires protected match-only mode');
+assert.equal(combinedDiagnose.failure, null);
+assert.equal(combinedDiagnose.exports.TARGET_INDEX, '1');
+assert.equal(combinedDiagnose.exports.GCE_USER, 'mock-user');
+assert.equal(combinedDiagnose.outputs.ssh_private_key_secret_name, 'mock-ssh-key');
+assert.equal(combinedDiagnose.outputs.gcp_secret_project_id, 'mock-project-1');
+assert.equal(combinedDiagnose.outputs.gateway_ip_expected_host, undefined);
+assert.ok(combinedDiagnose.secrets.includes('mock-ssh-key'));
+
+const combinedMatchedDiagnose = runMetadataResolve({
+  MATCH_CURRENT_GATEWAY: 'true',
+  INSPECT_CONNECTIONS: 'true',
+  INSPECT_SSH_POLICY: 'false',
+  REMAINING_GATEWAYS: 'true',
+  MATCH_TARGETS_JSON: JSON.stringify(targets),
+  MATCHED_INDEX: '{"target_index":2}',
+  TARGET_INDEX: '2',
+});
+assert.equal(combinedMatchedDiagnose.failure, 'Resolved gateway target is not an eligible remaining target');
+assert.equal(combinedMatchedDiagnose.outputs.ssh_private_key_secret_name, undefined);
+
+const invalidRemainingMetadataMode = runMetadataResolve({
+  MATCH_CURRENT_GATEWAY: 'true',
+  INSPECT_CONNECTIONS: 'false',
+  INSPECT_SSH_POLICY: 'true',
+  REMAINING_GATEWAYS: 'true',
+  MATCH_TARGETS_JSON: JSON.stringify(targets),
+  MATCHED_INDEX: '{"target_index":2}',
+  TARGET_INDEX: '1',
+});
+assert.equal(invalidRemainingMetadataMode.failure, 'Remaining gateway inspection requires protected metadata or passive-connection mode');
 
 const inspect = runResolve({
   MATCH_CURRENT_GATEWAY: 'true',
@@ -240,6 +298,10 @@ const badBinding = runResolve({
   LEGACY_TARGETS_JSON: JSON.stringify(targets),
 });
 assert.equal(badBinding.failure, 'Passive inspection requires protected current-gateway matching');
+
+assert.match(workflow, /gateway_connection_target_verified=true/);
+assert.match(workflow, /if: \$\{\{ inputs\.inspect_connections && steps\.metadata_check\.outputs\.gateway_connection_target_verified == 'true' \}\}/);
+assert.doesNotMatch(workflow, /inputs\.remaining_gateways && steps\.metadata_check\.outputs\.gateway_ip_match_status/);
 
 const policyBadBinding = runResolve({
   MATCH_CURRENT_GATEWAY: 'false',
