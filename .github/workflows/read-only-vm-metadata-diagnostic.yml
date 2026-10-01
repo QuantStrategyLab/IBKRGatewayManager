@@ -75,8 +75,8 @@ jobs:
               core.setFailed("Passive inspection requires protected current-gateway matching");
               return;
             }
-            if (remainingGateways && (!matchMode || inspectConnections || inspectSshPolicy || inspectSshKeyBinding)) {
-              core.setFailed("Remaining gateway metadata inspection requires protected match-only mode");
+            if (remainingGateways && (!matchMode || inspectSshPolicy || inspectSshKeyBinding)) {
+              core.setFailed("Remaining gateway inspection requires protected metadata or passive-connection mode");
               return;
             }
             if (inspectSshKeyBinding && !inspectSshPolicy) {
@@ -124,6 +124,40 @@ jobs:
                 core.setFailed("Protected gateway target inventory is invalid");
                 return;
               }
+              if (remainingGateways) {
+                const matchedIndex = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
+                if (matchedIndex === undefined) {
+                  core.setFailed("Protected matched target index is unavailable");
+                  return;
+                }
+                const remainingTargets = targets
+                  .map((target, target_index) => ({ target, target_index }))
+                  .filter(({ target_index }) => target_index !== matchedIndex);
+                const invalidTarget = remainingTargets.some(({ target }) => {
+                  if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(target.gcp_project_id) ||
+                      !/^[a-z]([-a-z0-9]*[a-z0-9])?$/.test(target.gce_instance_name) ||
+                      !/^[a-z]+(?:-[a-z]+)*[0-9]+-[a-z]$/.test(target.gce_zone)) return true;
+                  if (!inspectConnections) return false;
+                  const secretProject = target.gcp_secret_project_id || target.gcp_project_id;
+                  return !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(secretProject) ||
+                    !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(target.gce_user || "") ||
+                    !/^[A-Za-z0-9_-]+$/.test(target.ssh_private_key_secret_name || "") ||
+                    !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(target.container_name || "") ||
+                    !["paper", "live"].includes(target.mode);
+                });
+                if (invalidTarget) {
+                  core.setFailed(inspectConnections
+                    ? "Protected remaining target connection configuration is incomplete"
+                    : "Protected remaining target metadata configuration is incomplete");
+                  return;
+                }
+                core.setOutput("matrix", JSON.stringify({include: remainingTargets.map(({ target_index }) => ({
+                  target_index,
+                  inspect_connections: inspectConnections,
+                  inspect_ssh_policy: false,
+                }))}));
+                return;
+              }
               if (inspectConnections || inspectSshPolicy || inspectSshKeyBinding) {
                 const selectedIndex = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
                 if (selectedIndex === undefined) {
@@ -146,25 +180,6 @@ jobs:
                   return;
                 }
                 core.setOutput("matrix", JSON.stringify({include: [{target_index: selectedIndex, inspect_connections: inspectConnections, inspect_ssh_policy: inspectSshPolicy}]}));
-                return;
-              }
-              if (remainingGateways) {
-                const matchedIndex = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
-                if (matchedIndex === undefined) {
-                  core.setFailed("Protected matched target index is unavailable");
-                  return;
-                }
-                const remainingTargets = targets.filter((_, targetIndex) => targetIndex !== matchedIndex);
-                if (remainingTargets.some((target) =>
-                  !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(target.gcp_project_id) ||
-                  !/^[a-z]([-a-z0-9]*[a-z0-9])?$/.test(target.gce_instance_name) ||
-                  !/^[a-z]+(?:-[a-z]+)*[0-9]+-[a-z]$/.test(target.gce_zone))) {
-                  core.setFailed("Protected remaining target metadata configuration is incomplete");
-                  return;
-                }
-                core.setOutput("matrix", JSON.stringify({include: targets
-                  .map((_, target_index) => ({target_index}))
-                  .filter(({target_index}) => target_index !== matchedIndex)}));
                 return;
               }
               core.setOutput("matrix", JSON.stringify({include: targets.map((_, target_index) => ({target_index}))}));
@@ -223,8 +238,8 @@ jobs:
             const inspectSshPolicy = process.env.INSPECT_SSH_POLICY === "true";
             const inspectSshKeyBinding = process.env.INSPECT_SSH_KEY_BINDING === "true";
             const remainingGateways = process.env.REMAINING_GATEWAYS === "true";
-            if (remainingGateways && (!matchMode || inspectConnections || inspectSshPolicy || inspectSshKeyBinding)) {
-              core.setFailed("Remaining gateway metadata inspection requires protected match-only mode");
+            if (remainingGateways && (!matchMode || inspectSshPolicy || inspectSshKeyBinding)) {
+              core.setFailed("Remaining gateway inspection requires protected metadata or passive-connection mode");
               return;
             }
             const raw = matchMode ? process.env.MATCH_TARGETS_JSON : process.env.LEGACY_TARGETS_JSON;
@@ -262,17 +277,19 @@ jobs:
                 core.setFailed("Protected gateway target inventory is invalid");
                 return;
               }
-              const matchedIndex = (inspectConnections || inspectSshPolicy || inspectSshKeyBinding) ? parseProtectedGatewayIndex(process.env.MATCHED_INDEX) : undefined;
-              if ((inspectConnections || inspectSshPolicy || inspectSshKeyBinding) && (matchedIndex === undefined || matchedIndex !== targetIndex)) {
+              const matchedIndex = (inspectConnections || inspectSshPolicy || inspectSshKeyBinding || remainingGateways) ? parseProtectedGatewayIndex(process.env.MATCHED_INDEX) : undefined;
+              if ((inspectConnections || inspectSshPolicy || inspectSshKeyBinding) && !remainingGateways &&
+                  (matchedIndex === undefined || matchedIndex !== targetIndex)) {
                 core.setFailed("Protected matched target index is unavailable");
                 return;
               }
-              if (remainingGateways) {
-                const matchedIndex = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
-                if (matchedIndex === undefined || matchedIndex === targetIndex) {
-                  core.setFailed("Resolved gateway target is not an eligible remaining target");
-                  return;
-                }
+              if (remainingGateways && matchedIndex === undefined) {
+                core.setFailed("Protected matched target index is unavailable");
+                return;
+              }
+              if (remainingGateways && matchedIndex === targetIndex) {
+                core.setFailed("Resolved gateway target is not an eligible remaining target");
+                return;
               }
               target = targets[targetIndex];
               if (remainingGateways &&
@@ -281,6 +298,17 @@ jobs:
                    !/^[a-z]+(?:-[a-z]+)*[0-9]+-[a-z]$/.test(String(target?.gce_zone || "")))) {
                 core.setFailed("Protected remaining target metadata configuration is incomplete");
                 return;
+              }
+              if (remainingGateways && inspectConnections) {
+                const secretProject = target.gcp_secret_project_id || target.gcp_project_id;
+                if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(String(secretProject || "")) ||
+                    !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(String(target.gce_user || "")) ||
+                    !/^[A-Za-z0-9_-]+$/.test(String(target.ssh_private_key_secret_name || "")) ||
+                    !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(String(target.container_name || "")) ||
+                    !["paper", "live"].includes(target.mode)) {
+                  core.setFailed("Protected remaining target connection configuration is incomplete");
+                  return;
+                }
               }
             } else {
               target = targets[targetIndex];
@@ -463,6 +491,9 @@ jobs:
                 python3 scripts/match_gateway_metadata.py \
                 --metadata-file "${metadata_file}" --target-index "${TARGET_INDEX}" \
                 --verify-target-identity; then
+                if [ "${INSPECT_CONNECTIONS}" = "true" ]; then
+                  echo "gateway_connection_target_verified=true" >> "${GITHUB_OUTPUT}"
+                fi
                 exit 0
               fi
               exit 1
@@ -485,6 +516,9 @@ jobs:
               fi
               exit 1
             fi
+            if [ "${INSPECT_CONNECTIONS}" = "true" ] && [ "${match_status}" = "match" ]; then
+              echo "gateway_connection_target_verified=true" >> "${GITHUB_OUTPUT}"
+            fi
             exit "${match_exit}"
           fi
           VM_METADATA_FILE="${metadata_file}" python3 - <<'PY'
@@ -501,7 +535,7 @@ jobs:
           PY
 
       - name: Read SSH key into a restricted temporary file
-        if: ${{ inputs.inspect_connections && steps.metadata_check.outputs.gateway_ip_match_status == 'match' }}
+        if: ${{ inputs.inspect_connections && steps.metadata_check.outputs.gateway_connection_target_verified == 'true' }}
         env:
           SSH_PRIVATE_KEY_SECRET_NAME: ${{ steps.metadata.outputs.ssh_private_key_secret_name }}
           GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_secret_project_id }}
@@ -677,7 +711,7 @@ jobs:
           fi
 
       - name: Inspect Gateway connections through one IAP SSH session
-        if: ${{ inputs.inspect_connections && steps.metadata_check.outputs.gateway_ip_match_status == 'match' }}
+        if: ${{ inputs.inspect_connections && steps.metadata_check.outputs.gateway_connection_target_verified == 'true' }}
         env:
           GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_project_id }}
           TARGET_INDEX: ${{ matrix.target_index }}
