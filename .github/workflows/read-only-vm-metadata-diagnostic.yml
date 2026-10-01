@@ -32,6 +32,10 @@ on:
         required: true
         default: false
         type: boolean
+      remaining_gateway_index:
+        description: Optionally inspect one protected remaining target by inventory index 0 through 3
+        required: false
+        type: string
 
 concurrency:
   group: read-only-gateway-vm-metadata-${{ inputs.match_current_gateway && 'match-current' || inputs.target }}
@@ -58,6 +62,7 @@ jobs:
           INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           INSPECT_SSH_KEY_BINDING: ${{ inputs.inspect_ssh_key_binding }}
           REMAINING_GATEWAYS: ${{ inputs.remaining_gateways }}
+          REMAINING_GATEWAY_INDEX: ${{ inputs.remaining_gateway_index }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
           MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
           LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
@@ -71,6 +76,13 @@ jobs:
             const inspectSshPolicy = process.env.INSPECT_SSH_POLICY === "true";
             const inspectSshKeyBinding = process.env.INSPECT_SSH_KEY_BINDING === "true";
             const remainingGateways = process.env.REMAINING_GATEWAYS === "true";
+            const remainingGatewayIndex = process.env.REMAINING_GATEWAY_INDEX || "";
+            if (remainingGatewayIndex && (!/^[0-3]$/.test(remainingGatewayIndex)
+                || !matchMode || !remainingGateways || !inspectConnections
+                || inspectSshPolicy || inspectSshKeyBinding)) {
+              core.setFailed("Selected remaining gateway index requires protected passive connection inspection");
+              return;
+            }
             if ((inspectConnections || inspectSshPolicy || inspectSshKeyBinding) && !matchMode) {
               core.setFailed("Passive inspection requires protected current-gateway matching");
               return;
@@ -133,7 +145,19 @@ jobs:
                 const remainingTargets = targets
                   .map((target, target_index) => ({ target, target_index }))
                   .filter(({ target_index }) => target_index !== matchedIndex);
-                const invalidTarget = remainingTargets.some(({ target }) => {
+                const requestedIndex = remainingGatewayIndex === "" ? undefined : Number(remainingGatewayIndex);
+                if (requestedIndex !== undefined && requestedIndex === matchedIndex) {
+                  core.setFailed("Selected gateway index is not an eligible remaining target");
+                  return;
+                }
+                const selectedTargets = requestedIndex === undefined
+                  ? remainingTargets
+                  : remainingTargets.filter(({ target_index }) => target_index === requestedIndex);
+                if (requestedIndex !== undefined && selectedTargets.length !== 1) {
+                  core.setFailed("Selected gateway index is not an eligible remaining target");
+                  return;
+                }
+                const invalidTarget = selectedTargets.some(({ target }) => {
                   if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(target.gcp_project_id) ||
                       !/^[a-z]([-a-z0-9]*[a-z0-9])?$/.test(target.gce_instance_name) ||
                       !/^[a-z]+(?:-[a-z]+)*[0-9]+-[a-z]$/.test(target.gce_zone)) return true;
@@ -151,7 +175,7 @@ jobs:
                     : "Protected remaining target metadata configuration is incomplete");
                   return;
                 }
-                core.setOutput("matrix", JSON.stringify({include: remainingTargets.map(({ target_index }) => ({
+                core.setOutput("matrix", JSON.stringify({include: selectedTargets.map(({ target_index }) => ({
                   target_index,
                   inspect_connections: inspectConnections,
                   inspect_ssh_policy: false,
@@ -223,6 +247,7 @@ jobs:
           INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           INSPECT_SSH_KEY_BINDING: ${{ inputs.inspect_ssh_key_binding }}
           REMAINING_GATEWAYS: ${{ inputs.remaining_gateways }}
+          REMAINING_GATEWAY_INDEX: ${{ inputs.remaining_gateway_index }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
           MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
           LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
@@ -238,6 +263,13 @@ jobs:
             const inspectSshPolicy = process.env.INSPECT_SSH_POLICY === "true";
             const inspectSshKeyBinding = process.env.INSPECT_SSH_KEY_BINDING === "true";
             const remainingGateways = process.env.REMAINING_GATEWAYS === "true";
+            const remainingGatewayIndex = process.env.REMAINING_GATEWAY_INDEX || "";
+            if (remainingGatewayIndex && (!/^[0-3]$/.test(remainingGatewayIndex)
+                || !matchMode || !remainingGateways || !inspectConnections
+                || inspectSshPolicy || inspectSshKeyBinding)) {
+              core.setFailed("Selected remaining gateway index requires protected passive connection inspection");
+              return;
+            }
             if (remainingGateways && (!matchMode || inspectSshPolicy || inspectSshKeyBinding)) {
               core.setFailed("Remaining gateway inspection requires protected metadata or passive-connection mode");
               return;
@@ -289,6 +321,11 @@ jobs:
               }
               if (remainingGateways && matchedIndex === targetIndex) {
                 core.setFailed("Resolved gateway target is not an eligible remaining target");
+                return;
+              }
+              if (remainingGatewayIndex !== "" && (Number(remainingGatewayIndex) === matchedIndex
+                  || targetIndex !== Number(remainingGatewayIndex))) {
+                core.setFailed("Resolved gateway target does not match selected remaining index");
                 return;
               }
               target = targets[targetIndex];
