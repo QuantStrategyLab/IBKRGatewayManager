@@ -150,8 +150,17 @@ class GatewaySshPolicyWorkflowTests(unittest.TestCase):
             fake_gcloud.chmod(0o700)
             runner_temp = root / "runner-temp"
             runner_temp.mkdir()
+            isolated_env = {
+                key: value for key, value in os.environ.items()
+                if key not in {
+                    "INSPECT_SSH_KEY_BINDING",
+                    "SSH_PRIVATE_KEY_SECRET_NAME",
+                    "GCP_SECRET_PROJECT_ID",
+                    "GCE_USER",
+                }
+            }
             environment = {
-                **os.environ,
+                **isolated_env,
                 "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
                 "GCP_PROJECT_ID": "synthetic-project",
                 "GCE_INSTANCE_NAME": "synthetic-instance",
@@ -161,6 +170,10 @@ class GatewaySshPolicyWorkflowTests(unittest.TestCase):
                 "FAKE_INSTANCE_IP": instance_ip,
                 "RUNNER_TEMP": str(runner_temp),
                 "FAKE_GCLOUD_LOG": str(call_log),
+                "INSPECT_SSH_KEY_BINDING": "false",
+                "SSH_PRIVATE_KEY_SECRET_NAME": "synthetic-secret-name",
+                "GCP_SECRET_PROJECT_ID": "synthetic-secret-project",
+                "GCE_USER": "synthetic-user",
             }
             completed = subprocess.run(
                 ["bash", "-euo", "pipefail", "-c", ssh_policy_run_script()],
@@ -176,7 +189,7 @@ class GatewaySshPolicyWorkflowTests(unittest.TestCase):
 
     def test_embedded_step_uses_only_two_metadata_gets_and_never_ssh(self):
         shell_source = ssh_policy_run_script().lower()
-        for forbidden in ("gcloud secrets", "ssh ", "start-iap-tunnel"):
+        for forbidden in ("ssh ", "start-iap-tunnel"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, shell_source)
         result, calls, leftovers = self._run_embedded_policy_step()
