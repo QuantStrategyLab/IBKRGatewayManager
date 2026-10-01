@@ -20,10 +20,10 @@ const resolveScript = resolveScriptLines.join('\n');
 assert.ok(workflow.includes('  resolve:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n'));
 assert.match(resolveBlock, /uses: actions\/checkout@v6\n\s+with:\n\s+persist-credentials: false/);
 const ordinarySetup = workflow.slice(workflow.indexOf('- name: Set up gcloud\n'), workflow.indexOf('- name: Set up gcloud for passive inspection\n'));
-assert.match(ordinarySetup, /if: \$\{\{ !inputs\.inspect_connections \}\}/);
+assert.match(ordinarySetup, /if: \$\{\{ !inputs\.inspect_connections && !inputs\.inspect_ssh_policy \}\}/);
 assert.doesNotMatch(ordinarySetup, /NODE_OPTIONS/);
 const inspectedSetup = workflow.slice(workflow.indexOf('- name: Set up gcloud for passive inspection\n'), workflow.indexOf('- name: Stop if protected cloud access is unavailable\n'));
-assert.match(inspectedSetup, /if: \$\{\{ inputs\.inspect_connections && steps\.auth_filtered\.outcome == 'success' \}\}/);
+assert.match(inspectedSetup, /if: \$\{\{ \(inputs\.inspect_connections \|\| inputs\.inspect_ssh_policy\) && steps\.auth_filtered\.outcome == 'success' \}\}/);
 assert.match(inspectedSetup, /NODE_OPTIONS: --require=\$\{\{ github\.workspace \}\}\/scripts\/filter_github_action_auth_logs\.cjs/);
 assert.match(workflow, /steps\.gcloud_setup_filtered\.outcome != 'success'/);
 
@@ -43,7 +43,7 @@ const targets = Array.from({ length: 4 }, (_, index) => ({
 function runResolve(envValues) {
   const originalEnv = { ...process.env };
   for (const key of [
-    'GITHUB_WORKSPACE', 'MATCH_CURRENT_GATEWAY', 'INSPECT_CONNECTIONS', 'MATCH_TARGETS_JSON',
+    'GITHUB_WORKSPACE', 'MATCH_CURRENT_GATEWAY', 'INSPECT_CONNECTIONS', 'INSPECT_SSH_POLICY', 'MATCH_TARGETS_JSON',
     'MATCHED_INDEX', 'LEGACY_TARGETS_JSON', 'SELECTED_TARGET',
   ]) delete process.env[key];
   Object.assign(process.env, { GITHUB_WORKSPACE: repoRoot }, envValues);
@@ -66,6 +66,7 @@ function runResolve(envValues) {
 const legacy = runResolve({
   MATCH_CURRENT_GATEWAY: 'false',
   INSPECT_CONNECTIONS: 'false',
+  INSPECT_SSH_POLICY: 'false',
   LEGACY_TARGETS_JSON: JSON.stringify(Object.fromEntries(targets.map(({ name, ...target }) => [name, target]))),
   SELECTED_TARGET: 'gateway-2',
 });
@@ -78,6 +79,7 @@ assert.match(legacyMatrix[0].target_digest, /^[a-f0-9]{64}$/);
 const matchOnly = runResolve({
   MATCH_CURRENT_GATEWAY: 'true',
   INSPECT_CONNECTIONS: 'false',
+  INSPECT_SSH_POLICY: 'false',
   MATCH_TARGETS_JSON: JSON.stringify(targets),
 });
 assert.equal(matchOnly.failure, null);
@@ -86,17 +88,56 @@ assert.deepEqual(JSON.parse(matchOnly.outputs.matrix).include.map((item) => item
 const inspect = runResolve({
   MATCH_CURRENT_GATEWAY: 'true',
   INSPECT_CONNECTIONS: 'true',
+  INSPECT_SSH_POLICY: 'false',
   MATCH_TARGETS_JSON: JSON.stringify(targets),
   MATCHED_INDEX: '{"target_index":2}',
 });
 assert.equal(inspect.failure, null);
-assert.deepEqual(JSON.parse(inspect.outputs.matrix).include, [{ target_index: 2, inspect_connections: true }]);
+assert.deepEqual(JSON.parse(inspect.outputs.matrix).include, [{ target_index: 2, inspect_connections: true, inspect_ssh_policy: false }]);
+
+const policy = runResolve({
+  MATCH_CURRENT_GATEWAY: 'true',
+  INSPECT_CONNECTIONS: 'false',
+  INSPECT_SSH_POLICY: 'true',
+  MATCH_TARGETS_JSON: JSON.stringify(targets),
+  MATCHED_INDEX: '{"target_index":1}',
+});
+assert.equal(policy.failure, null);
+assert.deepEqual(JSON.parse(policy.outputs.matrix).include, [{ target_index: 1, inspect_connections: false, inspect_ssh_policy: true }]);
+
+const policyWithoutSshConfig = runResolve({
+  MATCH_CURRENT_GATEWAY: 'true',
+  INSPECT_CONNECTIONS: 'false',
+  INSPECT_SSH_POLICY: 'true',
+  MATCH_TARGETS_JSON: JSON.stringify(targets.map(({ gce_user, ssh_private_key_secret_name, container_name, mode, ...target }) => target)),
+  MATCHED_INDEX: '{"target_index":1}',
+});
+assert.equal(policyWithoutSshConfig.failure, null);
+assert.deepEqual(JSON.parse(policyWithoutSshConfig.outputs.matrix).include, [{ target_index: 1, inspect_connections: false, inspect_ssh_policy: true }]);
+
+const policyAndConnections = runResolve({
+  MATCH_CURRENT_GATEWAY: 'true',
+  INSPECT_CONNECTIONS: 'true',
+  INSPECT_SSH_POLICY: 'true',
+  MATCH_TARGETS_JSON: JSON.stringify(targets),
+  MATCHED_INDEX: '{"target_index":1}',
+});
+assert.equal(policyAndConnections.failure, 'SSH policy inspection cannot be combined with connection inspection');
 
 const badBinding = runResolve({
   MATCH_CURRENT_GATEWAY: 'false',
   INSPECT_CONNECTIONS: 'true',
+  INSPECT_SSH_POLICY: 'false',
   LEGACY_TARGETS_JSON: JSON.stringify(targets),
 });
-assert.equal(badBinding.failure, 'Connection inspection requires protected current-gateway matching');
+assert.equal(badBinding.failure, 'Passive inspection requires protected current-gateway matching');
+
+const policyBadBinding = runResolve({
+  MATCH_CURRENT_GATEWAY: 'false',
+  INSPECT_CONNECTIONS: 'false',
+  INSPECT_SSH_POLICY: 'true',
+  LEGACY_TARGETS_JSON: JSON.stringify(targets),
+});
+assert.equal(policyBadBinding.failure, 'Passive inspection requires protected current-gateway matching');
 
 console.log('PASS: actual workflow resolve step loads parser and preserves legacy/match/inspect routing');

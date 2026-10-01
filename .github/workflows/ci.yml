@@ -31,6 +31,7 @@ jobs:
           node tests/test_parse_protected_gateway_index.cjs
           node tests/test_gateway_workflow_resolve.cjs
           python3 -m unittest discover -s tests -p 'test_match_gateway_metadata.py'
+          python3 -m unittest discover -s tests -p 'test_gateway_ssh_policy.py'
           python3 -m unittest discover -s tests -p 'test_gateway_ssh_failure_diagnostics.py'
 
   docker-build:
