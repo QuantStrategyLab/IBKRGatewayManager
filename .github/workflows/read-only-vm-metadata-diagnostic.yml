@@ -17,6 +17,11 @@ on:
         required: true
         default: false
         type: boolean
+      inspect_ssh_policy:
+        description: Read effective SSH policy metadata for the protected matched target
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: read-only-gateway-vm-metadata-${{ inputs.match_current_gateway && 'match-current' || inputs.target }}
@@ -40,8 +45,9 @@ jobs:
         env:
           MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
           INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
+          INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
-          MATCHED_INDEX: ${{ inputs.inspect_connections && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
+          MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
           LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
           SELECTED_TARGET: ${{ inputs.target }}
         uses: actions/github-script@v8
@@ -50,8 +56,13 @@ jobs:
             const { parseProtectedGatewayIndex } = require(`${process.env.GITHUB_WORKSPACE}/scripts/parse_protected_gateway_index.cjs`);
             const matchMode = process.env.MATCH_CURRENT_GATEWAY === "true";
             const inspectConnections = process.env.INSPECT_CONNECTIONS === "true";
-            if (inspectConnections && !matchMode) {
-              core.setFailed("Connection inspection requires protected current-gateway matching");
+            const inspectSshPolicy = process.env.INSPECT_SSH_POLICY === "true";
+            if ((inspectConnections || inspectSshPolicy) && !matchMode) {
+              core.setFailed("Passive inspection requires protected current-gateway matching");
+              return;
+            }
+            if (inspectConnections && inspectSshPolicy) {
+              core.setFailed("SSH policy inspection cannot be combined with connection inspection");
               return;
             }
             const raw = matchMode ? process.env.MATCH_TARGETS_JSON : process.env.LEGACY_TARGETS_JSON;
@@ -87,21 +98,21 @@ jobs:
                 core.setFailed("Protected gateway target inventory is invalid");
                 return;
               }
-              if (inspectConnections) {
+              if (inspectConnections || inspectSshPolicy) {
                 const selectedIndex = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
                 if (selectedIndex === undefined) {
                   core.setFailed("Protected matched target index is unavailable");
                   return;
                 }
                 const target = targets[selectedIndex];
-                if (!target || !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(target.gce_user || "") ||
+                if (inspectConnections && (!target || !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(target.gce_user || "") ||
                     !/^[A-Za-z0-9_-]+$/.test(target.ssh_private_key_secret_name || "") ||
                     !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(target.container_name || "") ||
-                    !["paper", "live"].includes(target.mode)) {
+                    !["paper", "live"].includes(target.mode))) {
                   core.setFailed("Protected matched target connection configuration is incomplete");
                   return;
                 }
-                core.setOutput("matrix", JSON.stringify({include: [{target_index: selectedIndex, inspect_connections: true}]}));
+                core.setOutput("matrix", JSON.stringify({include: [{target_index: selectedIndex, inspect_connections: inspectConnections, inspect_ssh_policy: inspectSshPolicy}]}));
                 return;
               }
               core.setOutput("matrix", JSON.stringify({include: targets.map((_, target_index) => ({target_index}))}));
@@ -142,8 +153,9 @@ jobs:
         env:
           MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
           INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
+          INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
-          MATCHED_INDEX: ${{ inputs.inspect_connections && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
+          MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
           LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
           SELECTED_TARGET: ${{ inputs.target }}
           TARGET_INDEX: ${{ matrix.target_index }}
@@ -154,6 +166,7 @@ jobs:
             const { parseProtectedGatewayIndex } = require(`${process.env.GITHUB_WORKSPACE}/scripts/parse_protected_gateway_index.cjs`);
             const matchMode = process.env.MATCH_CURRENT_GATEWAY === "true";
             const inspectConnections = process.env.INSPECT_CONNECTIONS === "true";
+            const inspectSshPolicy = process.env.INSPECT_SSH_POLICY === "true";
             const raw = matchMode ? process.env.MATCH_TARGETS_JSON : process.env.LEGACY_TARGETS_JSON;
             if (!raw || !raw.trim()) {
               core.setFailed(matchMode ? "Protected gateway target inventory is required" : "IB_GATEWAY_TARGETS_JSON is required");
@@ -189,8 +202,8 @@ jobs:
                 core.setFailed("Protected gateway target inventory is invalid");
                 return;
               }
-              const matchedIndex = inspectConnections ? parseProtectedGatewayIndex(process.env.MATCHED_INDEX) : undefined;
-              if (inspectConnections && (matchedIndex === undefined || matchedIndex !== targetIndex)) {
+              const matchedIndex = (inspectConnections || inspectSshPolicy) ? parseProtectedGatewayIndex(process.env.MATCHED_INDEX) : undefined;
+              if ((inspectConnections || inspectSshPolicy) && (matchedIndex === undefined || matchedIndex !== targetIndex)) {
                 core.setFailed("Protected matched target index is unavailable");
                 return;
               }
@@ -214,6 +227,14 @@ jobs:
               GCE_INSTANCE_NAME: target.gce_instance_name,
               GCE_ZONE: target.gce_zone,
             };
+            if (inspectConnections || inspectSshPolicy) {
+              if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(String(target.gcp_project_id || "")) ||
+                  !/^[a-z]([-a-z0-9]*[a-z0-9])?$/.test(String(target.gce_instance_name || "")) ||
+                  !/^[a-z]+(?:-[a-z]+)*[0-9]+-[a-z]$/.test(String(target.gce_zone || ""))) {
+                core.setFailed("Protected matched target metadata configuration is incomplete");
+                return;
+              }
+            }
             if (inspectConnections) {
               const requiredConnectionValues = {
                 GCE_USER: target.gce_user,
@@ -259,7 +280,7 @@ jobs:
 
       - id: auth_filtered
         name: Authenticate to Google Cloud for passive inspection
-        if: ${{ inputs.inspect_connections }}
+        if: ${{ inputs.inspect_connections || inputs.inspect_ssh_policy }}
         continue-on-error: true
         uses: google-github-actions/auth@v3
         with:
@@ -270,14 +291,14 @@ jobs:
 
       - id: auth
         name: Authenticate to Google Cloud
-        if: ${{ !inputs.inspect_connections }}
+        if: ${{ !inputs.inspect_connections && !inputs.inspect_ssh_policy }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}
           service_account: ${{ steps.metadata.outputs.gcp_workload_identity_service_account }}
 
       - name: Set up gcloud
-        if: ${{ !inputs.inspect_connections }}
+        if: ${{ !inputs.inspect_connections && !inputs.inspect_ssh_policy }}
         id: gcloud_setup
         uses: google-github-actions/setup-gcloud@v3
         with:
@@ -285,7 +306,7 @@ jobs:
           version: '>= 416.0.0'
 
       - name: Set up gcloud for passive inspection
-        if: ${{ inputs.inspect_connections && steps.auth_filtered.outcome == 'success' }}
+        if: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy) && steps.auth_filtered.outcome == 'success' }}
         id: gcloud_setup_filtered
         continue-on-error: true
         uses: google-github-actions/setup-gcloud@v3
@@ -296,9 +317,13 @@ jobs:
           NODE_OPTIONS: --require=${{ github.workspace }}/scripts/filter_github_action_auth_logs.cjs
 
       - name: Stop if protected cloud access is unavailable
-        if: ${{ inputs.inspect_connections && (steps.auth_filtered.outcome != 'success' || steps.gcloud_setup_filtered.outcome != 'success') }}
+        if: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy) && (steps.auth_filtered.outcome != 'success' || steps.gcloud_setup_filtered.outcome != 'success') }}
         run: |
-          echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=cloud_access_unavailable"
+          if [ "${{ inputs.inspect_ssh_policy }}" = "true" ]; then
+            echo "SSH_POLICY=blocked reason=cloud_access_unavailable"
+          else
+            echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=cloud_access_unavailable"
+          fi
           exit 1
 
       - id: metadata_check
@@ -306,6 +331,7 @@ jobs:
         env:
           GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_project_id }}
           INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
+          INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
           TARGET_INDEX: ${{ matrix.target_index }}
           IB_GATEWAY_EXPECTED_HOST: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_EXPECTED_HOST || '' }}
@@ -338,8 +364,12 @@ jobs:
             printf '%s\n' "${match_output}"
             match_status="$(printf '%s\n' "${match_output}" | sed -n 's/^GATEWAY_IP_MATCH_STATUS=//p')"
             printf 'gateway_ip_match_status=%s\n' "${match_status}" >> "${GITHUB_OUTPUT}"
-            if [ "${INSPECT_CONNECTIONS}" = "true" ] && [ "${match_status}" != "match" ]; then
-              echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=metadata_mismatch"
+            if { [ "${INSPECT_CONNECTIONS}" = "true" ] || [ "${INSPECT_SSH_POLICY}" = "true" ]; } && [ "${match_status}" != "match" ]; then
+              if [ "${INSPECT_SSH_POLICY}" = "true" ]; then
+                echo "SSH_POLICY=blocked reason=metadata_mismatch"
+              else
+                echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=metadata_mismatch"
+              fi
               exit 1
             fi
             exit "${match_exit}"
@@ -392,6 +422,49 @@ jobs:
           fi
           echo "SSH_KEY_FILE=${key_file}" >> "${GITHUB_ENV}"
           key_handed_off=true
+
+      - id: ssh_policy
+        name: Read effective SSH policy metadata without connecting
+        if: ${{ inputs.inspect_ssh_policy && steps.metadata_check.outputs.gateway_ip_match_status == 'match' }}
+        env:
+          GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_project_id }}
+          TARGET_INDEX: ${{ matrix.target_index }}
+          IB_GATEWAY_EXPECTED_HOST: ${{ secrets.IB_GATEWAY_EXPECTED_HOST }}
+        run: |
+          set -euo pipefail
+          instance_file="$(mktemp "${RUNNER_TEMP}/gateway-ssh-policy-instance.XXXXXX" 2>/dev/null)"
+          project_file="$(mktemp "${RUNNER_TEMP}/gateway-ssh-policy-project.XXXXXX" 2>/dev/null)"
+          error_file="$(mktemp "${RUNNER_TEMP}/gateway-ssh-policy-error.XXXXXX" 2>/dev/null)"
+          trap 'rm -f "${instance_file}" "${project_file}" "${error_file}" 2>/dev/null || true' EXIT
+          if ! chmod 600 "${instance_file}" "${project_file}" "${error_file}" 2>/dev/null; then
+            echo "SSH_POLICY=blocked reason=metadata_unavailable"
+            exit 1
+          fi
+          if ! gcloud compute instances describe "${GCE_INSTANCE_NAME}" \
+            --project "${GCP_PROJECT_ID}" --zone "${GCE_ZONE}" --format=json >"${instance_file}" 2>"${error_file}"; then
+            echo "SSH_POLICY=blocked reason=instance_metadata_unavailable"
+            python3 scripts/classify_gcloud_metadata_failure.py --input "${error_file}"
+            exit 1
+          fi
+          if ! match_output="$(IB_GATEWAY_EXPECTED_HOST="${IB_GATEWAY_EXPECTED_HOST}" \
+            python3 scripts/match_gateway_metadata.py \
+              --metadata-file "${instance_file}" --target-index "${TARGET_INDEX}")"; then
+            echo "SSH_POLICY=blocked reason=instance_host_unverified"
+            exit 1
+          fi
+          match_status="$(printf '%s\n' "${match_output}" | sed -n 's/^GATEWAY_IP_MATCH_STATUS=//p')"
+          if [ "${match_status}" != "match" ]; then
+            echo "SSH_POLICY=blocked reason=instance_host_unverified"
+            exit 1
+          fi
+          if ! gcloud compute project-info describe \
+            --project "${GCP_PROJECT_ID}" --format=json >"${project_file}" 2>"${error_file}"; then
+            echo "SSH_POLICY=blocked reason=project_metadata_unavailable"
+            python3 scripts/classify_gcloud_metadata_failure.py --input "${error_file}"
+            exit 1
+          fi
+          python3 scripts/parse_gateway_ssh_policy.py \
+            --instance-file "${instance_file}" --project-file "${project_file}"
 
       - name: Inspect Gateway connections through one IAP SSH session
         if: ${{ inputs.inspect_connections && steps.metadata_check.outputs.gateway_ip_match_status == 'match' }}

@@ -8,6 +8,7 @@ test -f "$workflow_file"
 grep -Fq 'name: Read-Only Gateway VM Metadata Diagnostic' "$workflow_file"
 grep -Fq 'workflow_dispatch:' "$workflow_file"
 grep -Fq 'match_current_gateway:' "$workflow_file"
+grep -Fq 'inspect_ssh_policy:' "$workflow_file"
 grep -A3 -Fq 'match_current_gateway:' "$workflow_file"
 grep -Fq 'default: false' "$workflow_file"
 ! grep -Fq 'schedule:' "$workflow_file"
@@ -20,7 +21,7 @@ grep -Fq 'gcloud compute instances describe' "$workflow_file"
 grep -Fq 'uses: actions/checkout@v6' "$workflow_file"
 grep -Fq 'persist-credentials: false' "$workflow_file"
 grep -Fq 'GATEWAY_VM_DIAGNOSTIC_STATUS=VM_RUNNING' "$workflow_file"
-test "$(grep -Fc 'scripts/classify_gcloud_metadata_failure.py' "$workflow_file")" -eq 2
+test "$(grep -Fc 'scripts/classify_gcloud_metadata_failure.py' "$workflow_file")" -eq 4
 grep -Fq 'GATEWAY_VM_DIAGNOSTIC_FAILURE_CLASS=' "$repo_dir/scripts/classify_gcloud_metadata_failure.py"
 grep -Fq 'GATEWAY_VM_DIAGNOSTIC_LIMIT=NO_GATEWAY_OR_CONTAINER_HEALTH_ASSERTION' "$workflow_file"
 for forbidden in \
@@ -47,4 +48,10 @@ grep -Fq 'fail-fast: true' "$workflow_file"
 grep -Fq 'max-parallel: 1' "$workflow_file"
 grep -Fq 'scripts/match_gateway_metadata.py' "$workflow_file"
 grep -Fq 'targets.map((_, target_index) => ({target_index}))' "$workflow_file"
-test "$(grep -Fc 'gcloud compute instances describe' "$workflow_file")" -eq 1
+test "$(grep -Fc 'gcloud compute instances describe' "$workflow_file")" -eq 2
+grep -Fq 'gcloud compute project-info describe' "$workflow_file"
+grep -Fq 'scripts/parse_gateway_ssh_policy.py' "$workflow_file"
+grep -Fq 'SSH_POLICY=blocked reason=metadata_mismatch' "$workflow_file"
+grep -Fq 'SSH_POLICY=blocked reason=instance_host_unverified' "$workflow_file"
+grep -Fq 'SSH_POLICY=blocked reason=project_metadata_unavailable' "$workflow_file"
+grep -Fq 'SSH policy inspection cannot be combined with connection inspection' "$workflow_file"
