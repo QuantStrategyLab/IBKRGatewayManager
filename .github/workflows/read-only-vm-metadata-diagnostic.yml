@@ -27,6 +27,11 @@ on:
         required: true
         default: false
         type: boolean
+      remaining_gateways:
+        description: Read VM metadata for protected inventory targets other than the already completed target
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: read-only-gateway-vm-metadata-${{ inputs.match_current_gateway && 'match-current' || inputs.target }}
@@ -52,8 +57,9 @@ jobs:
           INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
           INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           INSPECT_SSH_KEY_BINDING: ${{ inputs.inspect_ssh_key_binding }}
+          REMAINING_GATEWAYS: ${{ inputs.remaining_gateways }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
-          MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
+          MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
           LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
           SELECTED_TARGET: ${{ inputs.target }}
         uses: actions/github-script@v8
@@ -64,8 +70,13 @@ jobs:
             const inspectConnections = process.env.INSPECT_CONNECTIONS === "true";
             const inspectSshPolicy = process.env.INSPECT_SSH_POLICY === "true";
             const inspectSshKeyBinding = process.env.INSPECT_SSH_KEY_BINDING === "true";
+            const remainingGateways = process.env.REMAINING_GATEWAYS === "true";
             if ((inspectConnections || inspectSshPolicy || inspectSshKeyBinding) && !matchMode) {
               core.setFailed("Passive inspection requires protected current-gateway matching");
+              return;
+            }
+            if (remainingGateways && (!matchMode || inspectConnections || inspectSshPolicy || inspectSshKeyBinding)) {
+              core.setFailed("Remaining gateway metadata inspection requires protected match-only mode");
               return;
             }
             if (inspectSshKeyBinding && !inspectSshPolicy) {
@@ -137,6 +148,25 @@ jobs:
                 core.setOutput("matrix", JSON.stringify({include: [{target_index: selectedIndex, inspect_connections: inspectConnections, inspect_ssh_policy: inspectSshPolicy}]}));
                 return;
               }
+              if (remainingGateways) {
+                const matchedIndex = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
+                if (matchedIndex === undefined) {
+                  core.setFailed("Protected matched target index is unavailable");
+                  return;
+                }
+                const remainingTargets = targets.filter((_, targetIndex) => targetIndex !== matchedIndex);
+                if (remainingTargets.some((target) =>
+                  !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(target.gcp_project_id) ||
+                  !/^[a-z]([-a-z0-9]*[a-z0-9])?$/.test(target.gce_instance_name) ||
+                  !/^[a-z]+(?:-[a-z]+)*[0-9]+-[a-z]$/.test(target.gce_zone))) {
+                  core.setFailed("Protected remaining target metadata configuration is incomplete");
+                  return;
+                }
+                core.setOutput("matrix", JSON.stringify({include: targets
+                  .map((_, target_index) => ({target_index}))
+                  .filter(({target_index}) => target_index !== matchedIndex)}));
+                return;
+              }
               core.setOutput("matrix", JSON.stringify({include: targets.map((_, target_index) => ({target_index}))}));
               return;
             }
@@ -158,8 +188,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
-      fail-fast: true
-      max-parallel: 1
+      fail-fast: ${{ !inputs.remaining_gateways }}
+      max-parallel: ${{ inputs.remaining_gateways && 3 || 1 }}
       matrix: ${{ fromJson(needs.resolve.outputs.matrix) }}
     permissions:
       contents: read
@@ -177,8 +207,9 @@ jobs:
           INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
           INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           INSPECT_SSH_KEY_BINDING: ${{ inputs.inspect_ssh_key_binding }}
+          REMAINING_GATEWAYS: ${{ inputs.remaining_gateways }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
-          MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
+          MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
           LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
           SELECTED_TARGET: ${{ inputs.target }}
           TARGET_INDEX: ${{ matrix.target_index }}
@@ -191,6 +222,11 @@ jobs:
             const inspectConnections = process.env.INSPECT_CONNECTIONS === "true";
             const inspectSshPolicy = process.env.INSPECT_SSH_POLICY === "true";
             const inspectSshKeyBinding = process.env.INSPECT_SSH_KEY_BINDING === "true";
+            const remainingGateways = process.env.REMAINING_GATEWAYS === "true";
+            if (remainingGateways && (!matchMode || inspectConnections || inspectSshPolicy || inspectSshKeyBinding)) {
+              core.setFailed("Remaining gateway metadata inspection requires protected match-only mode");
+              return;
+            }
             const raw = matchMode ? process.env.MATCH_TARGETS_JSON : process.env.LEGACY_TARGETS_JSON;
             if (!raw || !raw.trim()) {
               core.setFailed(matchMode ? "Protected gateway target inventory is required" : "IB_GATEWAY_TARGETS_JSON is required");
@@ -231,7 +267,21 @@ jobs:
                 core.setFailed("Protected matched target index is unavailable");
                 return;
               }
+              if (remainingGateways) {
+                const matchedIndex = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
+                if (matchedIndex === undefined || matchedIndex === targetIndex) {
+                  core.setFailed("Resolved gateway target is not an eligible remaining target");
+                  return;
+                }
+              }
               target = targets[targetIndex];
+              if (remainingGateways &&
+                  (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(String(target?.gcp_project_id || "")) ||
+                   !/^[a-z]([-a-z0-9]*[a-z0-9])?$/.test(String(target?.gce_instance_name || "")) ||
+                   !/^[a-z]+(?:-[a-z]+)*[0-9]+-[a-z]$/.test(String(target?.gce_zone || "")))) {
+                core.setFailed("Protected remaining target metadata configuration is incomplete");
+                return;
+              }
             } else {
               target = targets[targetIndex];
               const crypto = require("crypto");
@@ -319,7 +369,7 @@ jobs:
 
       - id: auth_filtered
         name: Authenticate to Google Cloud for passive inspection
-        if: ${{ inputs.inspect_connections || inputs.inspect_ssh_policy }}
+        if: ${{ inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways }}
         continue-on-error: true
         uses: google-github-actions/auth@v3
         with:
@@ -330,14 +380,14 @@ jobs:
 
       - id: auth
         name: Authenticate to Google Cloud
-        if: ${{ !inputs.inspect_connections && !inputs.inspect_ssh_policy }}
+        if: ${{ !inputs.inspect_connections && !inputs.inspect_ssh_policy && !inputs.remaining_gateways }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}
           service_account: ${{ steps.metadata.outputs.gcp_workload_identity_service_account }}
 
       - name: Set up gcloud
-        if: ${{ !inputs.inspect_connections && !inputs.inspect_ssh_policy }}
+        if: ${{ !inputs.inspect_connections && !inputs.inspect_ssh_policy && !inputs.remaining_gateways }}
         id: gcloud_setup
         uses: google-github-actions/setup-gcloud@v3
         with:
@@ -345,7 +395,7 @@ jobs:
           version: '>= 416.0.0'
 
       - name: Set up gcloud for passive inspection
-        if: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy) && steps.auth_filtered.outcome == 'success' }}
+        if: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && steps.auth_filtered.outcome == 'success' }}
         id: gcloud_setup_filtered
         continue-on-error: true
         uses: google-github-actions/setup-gcloud@v3
@@ -356,10 +406,16 @@ jobs:
           NODE_OPTIONS: --require=${{ github.workspace }}/scripts/filter_github_action_auth_logs.cjs
 
       - name: Stop if protected cloud access is unavailable
-        if: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy) && (steps.auth_filtered.outcome != 'success' || steps.gcloud_setup_filtered.outcome != 'success') }}
+        if: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && (steps.auth_filtered.outcome != 'success' || steps.gcloud_setup_filtered.outcome != 'success') }}
+        env:
+          TARGET_INDEX: ${{ matrix.target_index }}
         run: |
           if [ "${{ inputs.inspect_ssh_policy }}" = "true" ]; then
             echo "SSH_POLICY=blocked reason=cloud_access_unavailable"
+          elif [ "${{ inputs.remaining_gateways }}" = "true" ]; then
+            echo "GATEWAY_VM_DIAGNOSTIC_STATUS=UNKNOWN"
+            echo "GATEWAY_VM_DIAGNOSTIC_TARGET_INDEX=${TARGET_INDEX}"
+            echo "GATEWAY_VM_DIAGNOSTIC_FAILURE_CLASS=CLOUD_ACCESS_UNAVAILABLE"
           else
             echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=cloud_access_unavailable"
           fi
@@ -373,7 +429,8 @@ jobs:
           INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
           TARGET_INDEX: ${{ matrix.target_index }}
-          IB_GATEWAY_EXPECTED_HOST: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_EXPECTED_HOST || '' }}
+          REMAINING_GATEWAYS: ${{ inputs.remaining_gateways }}
+          IB_GATEWAY_EXPECTED_HOST: ${{ inputs.match_current_gateway && !inputs.remaining_gateways && secrets.IB_GATEWAY_EXPECTED_HOST || '' }}
         run: |
           set -euo pipefail
           metadata_file="$(mktemp)"
@@ -383,6 +440,12 @@ jobs:
             --zone "${GCE_ZONE}" \
             --format=json >"${metadata_file}" 2>&1; then
             if [ "${MATCH_CURRENT_GATEWAY}" = "true" ]; then
+              if [ "${REMAINING_GATEWAYS}" = "true" ]; then
+                echo "GATEWAY_VM_DIAGNOSTIC_STATUS=UNKNOWN"
+                echo "GATEWAY_VM_DIAGNOSTIC_TARGET_INDEX=${TARGET_INDEX}"
+                python3 scripts/classify_gcloud_metadata_failure.py --input "${metadata_file}"
+                exit 1
+              fi
               echo "GATEWAY_IP_MATCH_STATUS=unknown"
               echo "GATEWAY_IP_MATCH_INDEX=${TARGET_INDEX}"
               python3 scripts/classify_gcloud_metadata_failure.py --input "${metadata_file}"
@@ -393,6 +456,17 @@ jobs:
             exit 1
           fi
           if [ "${MATCH_CURRENT_GATEWAY}" = "true" ]; then
+            if [ "${REMAINING_GATEWAYS}" = "true" ]; then
+              if EXPECTED_GCP_PROJECT_ID="${GCP_PROJECT_ID}" \
+                EXPECTED_GCE_ZONE="${GCE_ZONE}" \
+                EXPECTED_GCE_INSTANCE_NAME="${GCE_INSTANCE_NAME}" \
+                python3 scripts/match_gateway_metadata.py \
+                --metadata-file "${metadata_file}" --target-index "${TARGET_INDEX}" \
+                --verify-target-identity; then
+                exit 0
+              fi
+              exit 1
+            fi
             if match_output="$(python3 scripts/match_gateway_metadata.py \
               --metadata-file "${metadata_file}" \
               --target-index "${TARGET_INDEX}")"; then
