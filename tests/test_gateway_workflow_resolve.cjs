@@ -28,6 +28,8 @@ for (const line of metadataBlock.slice(metadataScriptStart + 'script: |'.length)
 const metadataScript = metadataScriptLines.join('\n');
 assert.ok(workflow.includes('  resolve:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n'));
 assert.match(resolveBlock, /uses: actions\/checkout@v6\n\s+with:\n\s+persist-credentials: false/);
+assert.match(workflow, /remaining_gateway_index:[\s\S]*?required: false[\s\S]*?type: string/);
+assert.match(workflow, /Selected remaining gateway index requires protected passive connection inspection/);
 const ordinarySetup = workflow.slice(workflow.indexOf('- name: Set up gcloud\n'), workflow.indexOf('- name: Set up gcloud for passive inspection\n'));
 assert.match(ordinarySetup, /if: \$\{\{ !inputs\.inspect_connections && !inputs\.inspect_ssh_policy && !inputs\.remaining_gateways \}\}/);
 assert.doesNotMatch(ordinarySetup, /NODE_OPTIONS/);
@@ -53,7 +55,7 @@ function runResolve(envValues) {
   const originalEnv = { ...process.env };
   for (const key of [
     'GITHUB_WORKSPACE', 'MATCH_CURRENT_GATEWAY', 'INSPECT_CONNECTIONS', 'INSPECT_SSH_POLICY', 'MATCH_TARGETS_JSON',
-    'INSPECT_SSH_KEY_BINDING', 'REMAINING_GATEWAYS', 'MATCHED_INDEX', 'LEGACY_TARGETS_JSON', 'SELECTED_TARGET',
+    'INSPECT_SSH_KEY_BINDING', 'REMAINING_GATEWAYS', 'REMAINING_GATEWAY_INDEX', 'MATCHED_INDEX', 'LEGACY_TARGETS_JSON', 'SELECTED_TARGET',
   ]) delete process.env[key];
   Object.assign(process.env, { GITHUB_WORKSPACE: repoRoot }, envValues);
   const result = { outputs: {}, failure: null };
@@ -76,7 +78,7 @@ function runMetadataResolve(envValues) {
   const originalEnv = { ...process.env };
   for (const key of [
     'GITHUB_WORKSPACE', 'MATCH_CURRENT_GATEWAY', 'INSPECT_CONNECTIONS', 'INSPECT_SSH_POLICY',
-    'INSPECT_SSH_KEY_BINDING', 'REMAINING_GATEWAYS', 'MATCH_TARGETS_JSON', 'MATCHED_INDEX',
+    'INSPECT_SSH_KEY_BINDING', 'REMAINING_GATEWAYS', 'REMAINING_GATEWAY_INDEX', 'MATCH_TARGETS_JSON', 'MATCHED_INDEX',
     'LEGACY_TARGETS_JSON', 'SELECTED_TARGET', 'TARGET_INDEX', 'TARGET_DIGEST',
   ]) delete process.env[key];
   Object.assign(process.env, { GITHUB_WORKSPACE: repoRoot }, envValues);
@@ -175,6 +177,61 @@ assert.deepEqual(JSON.parse(remainingConnections.outputs.matrix).include, [
   { target_index: 3, inspect_connections: true, inspect_ssh_policy: false },
 ]);
 
+const selectedRemainingConnection = runResolve({
+  MATCH_CURRENT_GATEWAY: 'true',
+  INSPECT_CONNECTIONS: 'true',
+  INSPECT_SSH_POLICY: 'false',
+  INSPECT_SSH_KEY_BINDING: 'false',
+  REMAINING_GATEWAYS: 'true',
+  REMAINING_GATEWAY_INDEX: '1',
+  MATCH_TARGETS_JSON: JSON.stringify(targets),
+  MATCHED_INDEX: '{"target_index":2}',
+});
+assert.equal(selectedRemainingConnection.failure, null);
+assert.deepEqual(JSON.parse(selectedRemainingConnection.outputs.matrix).include, [
+  { target_index: 1, inspect_connections: true, inspect_ssh_policy: false },
+]);
+
+for (const invalidIndex of ['00', '4', '-1', '1.0', ' bad ']) {
+  const rejected = runResolve({
+    MATCH_CURRENT_GATEWAY: 'true',
+    INSPECT_CONNECTIONS: 'true',
+    INSPECT_SSH_POLICY: 'false',
+    INSPECT_SSH_KEY_BINDING: 'false',
+    REMAINING_GATEWAYS: 'true',
+    REMAINING_GATEWAY_INDEX: invalidIndex,
+    MATCH_TARGETS_JSON: JSON.stringify(targets),
+    MATCHED_INDEX: '{"target_index":2}',
+  });
+  assert.equal(rejected.failure, 'Selected remaining gateway index requires protected passive connection inspection');
+  assert.equal(rejected.outputs.matrix, undefined);
+}
+
+for (const invalidMode of [
+  { REMAINING_GATEWAYS: 'true', MATCH_CURRENT_GATEWAY: 'true', INSPECT_CONNECTIONS: 'false' },
+  { REMAINING_GATEWAYS: 'false', MATCH_CURRENT_GATEWAY: 'true', INSPECT_CONNECTIONS: 'true' },
+  { REMAINING_GATEWAYS: 'true', MATCH_CURRENT_GATEWAY: 'false', INSPECT_CONNECTIONS: 'true' },
+]) {
+  const rejected = runResolve({
+    ...invalidMode,
+    INSPECT_SSH_POLICY: 'false',
+    INSPECT_SSH_KEY_BINDING: 'false',
+    REMAINING_GATEWAY_INDEX: '1',
+    MATCH_TARGETS_JSON: JSON.stringify(targets),
+    MATCHED_INDEX: '{"target_index":2}',
+  });
+  assert.equal(rejected.failure, 'Selected remaining gateway index requires protected passive connection inspection');
+  assert.equal(rejected.outputs.matrix, undefined);
+}
+
+const selectedPrimary = runResolve({
+  MATCH_CURRENT_GATEWAY: 'true', INSPECT_CONNECTIONS: 'true', INSPECT_SSH_POLICY: 'false',
+  INSPECT_SSH_KEY_BINDING: 'false', REMAINING_GATEWAYS: 'true', REMAINING_GATEWAY_INDEX: '2',
+  MATCH_TARGETS_JSON: JSON.stringify(targets), MATCHED_INDEX: '{"target_index":2}',
+});
+assert.equal(selectedPrimary.failure, 'Selected gateway index is not an eligible remaining target');
+assert.equal(selectedPrimary.outputs.matrix, undefined);
+
 const missingRemainingConnectionConfig = runResolve({
   MATCH_CURRENT_GATEWAY: 'true',
   INSPECT_CONNECTIONS: 'true',
@@ -217,6 +274,7 @@ const combinedDiagnose = runMetadataResolve({
   INSPECT_CONNECTIONS: 'true',
   INSPECT_SSH_POLICY: 'false',
   REMAINING_GATEWAYS: 'true',
+  REMAINING_GATEWAY_INDEX: '1',
   MATCH_TARGETS_JSON: JSON.stringify(targets),
   MATCHED_INDEX: '{"target_index":2}',
   TARGET_INDEX: '1',
@@ -228,6 +286,22 @@ assert.equal(combinedDiagnose.outputs.ssh_private_key_secret_name, 'mock-ssh-key
 assert.equal(combinedDiagnose.outputs.gcp_secret_project_id, 'mock-project-1');
 assert.equal(combinedDiagnose.outputs.gateway_ip_expected_host, undefined);
 assert.ok(combinedDiagnose.secrets.includes('mock-ssh-key'));
+
+const rehydratedWrongIndex = runMetadataResolve({
+  MATCH_CURRENT_GATEWAY: 'true', INSPECT_CONNECTIONS: 'true', INSPECT_SSH_POLICY: 'false',
+  INSPECT_SSH_KEY_BINDING: 'false', REMAINING_GATEWAYS: 'true', REMAINING_GATEWAY_INDEX: '1',
+  MATCH_TARGETS_JSON: JSON.stringify(targets), MATCHED_INDEX: '{"target_index":2}', TARGET_INDEX: '0',
+});
+assert.equal(rehydratedWrongIndex.failure, 'Resolved gateway target does not match selected remaining index');
+assert.equal(rehydratedWrongIndex.exports.GCE_USER, undefined);
+
+const rehydratedMalformedIndex = runMetadataResolve({
+  MATCH_CURRENT_GATEWAY: 'true', INSPECT_CONNECTIONS: 'true', INSPECT_SSH_POLICY: 'false',
+  INSPECT_SSH_KEY_BINDING: 'false', REMAINING_GATEWAYS: 'true', REMAINING_GATEWAY_INDEX: '01',
+  MATCH_TARGETS_JSON: JSON.stringify(targets), MATCHED_INDEX: '{"target_index":2}', TARGET_INDEX: '1',
+});
+assert.equal(rehydratedMalformedIndex.failure, 'Selected remaining gateway index requires protected passive connection inspection');
+assert.equal(rehydratedMalformedIndex.exports.GCE_USER, undefined);
 
 const combinedMatchedDiagnose = runMetadataResolve({
   MATCH_CURRENT_GATEWAY: 'true',
