@@ -364,16 +364,18 @@ jobs:
           GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_secret_project_id }}
         run: |
           set -euo pipefail
-          key_file="$(mktemp "${RUNNER_TEMP}/gateway-ssh-key.XXXXXX")"
-          error_file="$(mktemp "${RUNNER_TEMP}/gateway-secret-error.XXXXXX")"
+          key_file="$(mktemp "${RUNNER_TEMP}/gateway-ssh-key.XXXXXX" 2>/dev/null)"
+          error_file="$(mktemp "${RUNNER_TEMP}/gateway-secret-error.XXXXXX" 2>/dev/null)"
           key_handed_off=false
           cleanup_secret_fetch() {
-            rm -f "${error_file}"
-            if [ "${key_handed_off}" != "true" ]; then rm -f "${key_file}"; fi
+            rm -f "${error_file}" 2>/dev/null || true
+            if [ "${key_handed_off}" != "true" ]; then rm -f "${key_file}" 2>/dev/null || true; fi
           }
           trap cleanup_secret_fetch EXIT
-          echo "SSH_KEY_FILE=${key_file}" >> "${GITHUB_ENV}"
-          chmod 600 "${key_file}"
+          if ! chmod 600 "${key_file}" 2>/dev/null; then
+            echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=credential_unavailable"
+            exit 1
+          fi
           if ! gcloud secrets versions access latest \
             --secret="${SSH_PRIVATE_KEY_SECRET_NAME}" \
             --project="${GCP_PROJECT_ID}" >"${key_file}" 2>"${error_file}"; then
@@ -384,7 +386,11 @@ jobs:
             echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=credential_unavailable"
             exit 1
           fi
-          chmod 600 "${key_file}"
+          if ! SSH_KEY_FILE="${key_file}" bash scripts/prepare_gateway_ssh_key.sh >/dev/null 2>"${error_file}"; then
+            echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=credential_invalid"
+            exit 1
+          fi
+          echo "SSH_KEY_FILE=${key_file}" >> "${GITHUB_ENV}"
           key_handed_off=true
 
       - name: Inspect Gateway connections through one IAP SSH session
@@ -394,11 +400,14 @@ jobs:
           TARGET_INDEX: ${{ matrix.target_index }}
         run: |
           set -euo pipefail
-          known_hosts="$(mktemp "${RUNNER_TEMP}/gateway-known-hosts.XXXXXX")"
-          output_file="$(mktemp "${RUNNER_TEMP}/gateway-inspection-output.XXXXXX")"
-          error_file="$(mktemp "${RUNNER_TEMP}/gateway-ssh-error.XXXXXX")"
-          trap 'rm -f "${known_hosts}" "${output_file}" "${error_file}" "${SSH_KEY_FILE}"' EXIT
-          chmod 600 "${known_hosts}" "${output_file}" "${error_file}"
+          known_hosts="$(mktemp "${RUNNER_TEMP}/gateway-known-hosts.XXXXXX" 2>/dev/null)"
+          output_file="$(mktemp "${RUNNER_TEMP}/gateway-inspection-output.XXXXXX" 2>/dev/null)"
+          error_file="$(mktemp "${RUNNER_TEMP}/gateway-ssh-error.XXXXXX" 2>/dev/null)"
+          trap 'rm -f "${known_hosts}" "${output_file}" "${error_file}" "${SSH_KEY_FILE}" 2>/dev/null || true' EXIT
+          if ! chmod 600 "${known_hosts}" "${output_file}" "${error_file}" 2>/dev/null; then
+            echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=inspection_unavailable"
+            exit 1
+          fi
           target_alias="gateway-target-${TARGET_INDEX}"
           # The temporary SSH host-key record is bound to this exact IAP target alias.
           proxy_command="gcloud compute start-iap-tunnel '${GCE_INSTANCE_NAME}' 22 --listen-on-stdin --project='${GCP_PROJECT_ID}' --zone='${GCE_ZONE}' --quiet"
@@ -419,36 +428,10 @@ jobs:
           else
             ssh_status=$?
           fi
-          python3 - "${output_file}" "${ssh_status}" <<'PY'
-          import re
-          import sys
-          from pathlib import Path
-
-          lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
-          ssh_status = int(sys.argv[2])
-          if len(lines) == 1 and re.fullmatch(r"GATEWAY_CONNECTION_INSPECTION=blocked reason=[a-z_]+", lines[0]):
-              print(lines[0])
-              raise SystemExit(1)
-          patterns = {
-              "GATEWAY_CONNECTION_INSPECTION": r"GATEWAY_CONNECTION_INSPECTION=observed",
-              "GATEWAY_CONTAINER_RUNNING": r"GATEWAY_CONTAINER_RUNNING=(true|false)",
-              "GATEWAY_API_LISTENER": r"GATEWAY_API_LISTENER=(true|false)",
-              "GATEWAY_ESTABLISHED_CONNECTION_COUNT": r"GATEWAY_ESTABLISHED_CONNECTION_COUNT=[0-9]+",
-              "GATEWAY_CONNECTION_OBSERVED_AT_UTC": r"GATEWAY_CONNECTION_OBSERVED_AT_UTC=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z",
-              "GATEWAY_CONNECTION_INSPECTION_LIMIT": r"GATEWAY_CONNECTION_INSPECTION_LIMIT=OBSERVATION_ONLY_NO_AUTH_OR_CONCURRENCY_ASSERTION",
-          }
-          names = [line.split("=", 1)[0] for line in lines]
-          if ssh_status != 0:
-              print("GATEWAY_CONNECTION_INSPECTION=blocked reason=ssh_unavailable")
-              raise SystemExit(1)
-          if len(lines) != len(patterns) or set(names) != set(patterns) or len(set(names)) != len(names) or any(
-              not re.fullmatch(patterns.get(name, ""), line) for name, line in zip(names, lines)
-          ):
-              print("GATEWAY_CONNECTION_INSPECTION=blocked reason=remote_response_invalid")
-              raise SystemExit(1)
-          for line in lines:
-              print(line)
-          PY
+          python3 scripts/classify_gateway_ssh_failure.py \
+            --stdout-file "${output_file}" \
+            --stderr-file "${error_file}" \
+            --exit-code "${ssh_status}"
 
       - name: Remove temporary SSH key
         if: ${{ always() && inputs.inspect_connections }}
@@ -456,8 +439,8 @@ jobs:
           SSH_KEY_FILE: ${{ env.SSH_KEY_FILE }}
         run: |
           set -euo pipefail
-          if [ -n "${SSH_KEY_FILE:-}" ]; then rm -f -- "${SSH_KEY_FILE}"; fi
+          if [ -n "${SSH_KEY_FILE:-}" ]; then rm -f -- "${SSH_KEY_FILE}" 2>/dev/null || true; fi
           for key_file in "${RUNNER_TEMP}"/gateway-ssh-key.*; do
             [ -e "${key_file}" ] || continue
-            rm -f -- "${key_file}"
+            rm -f -- "${key_file}" 2>/dev/null || true
           done
