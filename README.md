@@ -1,13 +1,6 @@
 # IBKRGatewayManager
 
-
-## QSL architecture role
-
-- **Layer**: `runtime-ops`.
-- **Responsibility**: IBKR gateway VM lifecycle and 2FA operations utility.
-- **Owns**: gateway deployment, remote sync, Docker rollout, watcher setup.
-- **Consumes**: InteractiveBrokersPlatform operational requirements.
-- **Must not**: decide strategy eligibility or submit trading orders.
+IBKRGatewayManager keeps an Interactive Brokers Gateway VM running for the QuantStrategyLab trading system. It handles the VM's deployment, remote sync, Docker rollout, and the 2FA watcher that keeps the Gateway logged in without an operator clicking through dialogs by hand. The InteractiveBrokersPlatform repository depends on this gateway being up and authenticated, but this repository never decides which strategy trades or submits an order itself.
 
 [Chinese README](README.zh-CN.md)
 
@@ -26,6 +19,14 @@ It supports the system but does not decide which strategy should be live. Strate
 - Keep secrets and environment-specific settings outside the shared library code.
 - Document changes that affect multiple platforms or strategy packages.
 - A compact, generic Gateway dialog never causes a click-through. If the API is unavailable, the watcher may perform one bounded container restart without acknowledging the dialog; an unresolved dialog still fails closed for operator review.
+
+## QSL architecture role
+
+- **Layer**: `runtime-ops`.
+- **Responsibility**: IBKR gateway VM lifecycle and 2FA operations utility.
+- **Owns**: gateway deployment, remote sync, Docker rollout, watcher setup.
+- **Consumes**: InteractiveBrokersPlatform operational requirements.
+- **Must not**: decide strategy eligibility or submit trading orders.
 
 ## Gateway target configuration
 
