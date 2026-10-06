@@ -1,13 +1,6 @@
 # IBKRGatewayManager
 
-
-## QSL 架构角色
-
-- **层级**：`运行时运维`。
-- **职责**：IBKR gateway VM 生命周期与 2FA 运维工具。
-- **事实源/归属**：gateway 部署、remote sync、Docker rollout、watcher setup。
-- **消费对象**：InteractiveBrokersPlatform 的运维需求。
-- **禁止事项**：决定策略 eligibility 或提交交易订单。
+IBKRGatewayManager 负责让 QuantStrategyLab 交易系统所依赖的 Interactive Brokers Gateway VM 持续在线。它管理这台 VM 的部署、远端同步、Docker 发布，以及让 Gateway 保持登录状态的 2FA watcher，省去运维人员手动点击验证弹窗。InteractiveBrokersPlatform 仓库依赖这个 Gateway 保持在线且已认证，但本仓库本身从不决定哪个策略交易、也不会提交订单。
 
 [English README](README.md)
 
@@ -26,6 +19,14 @@ IBKRGatewayManager 是 QuantStrategyLab 的IBKR Gateway 运维工具。管理 IB
 - 密钥和环境专属配置不要写进共享库代码。
 - 会影响多个平台或策略包的改动，需要在文档中说明。
 - 遇到小型、通用的 Gateway 弹窗时，系统绝不自动点击确认。若 API 不可用，watcher 最多只会做一次不点击弹窗的容器重启；弹窗仍存在则继续失败关闭，交由人工审阅。
+
+## QSL 架构角色
+
+- **层级**：`运行时运维`。
+- **职责**：IBKR gateway VM 生命周期与 2FA 运维工具。
+- **事实源/归属**：gateway 部署、remote sync、Docker rollout、watcher setup。
+- **消费对象**：InteractiveBrokersPlatform 的运维需求。
+- **禁止事项**：决定策略 eligibility 或提交交易订单。
 
 ## Gateway 目标配置
 
