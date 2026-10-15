@@ -292,9 +292,9 @@ result = subprocess.run(
     check=True,
     text=True,
 )
-assert "account=U***5678 host=<IP> <EMAIL>" in result.stdout
+assert "account=U***0001 host=<IP> <EMAIL>" in result.stdout
 assert "network=<IP> scoped=<IP> punctuation=<IP>." in result.stdout
-assert "paper_account=DU***4321 advisor_account=F***6543" in result.stdout
+assert "paper_account=DU***0001 advisor_account=F***0001" in result.stdout
 assert "TOTP_SECRET=<REDACTED>" in result.stdout
 assert "Authorization: <REDACTED>" in result.stdout
 assert 'json={"access_token":<REDACTED>' in result.stdout
