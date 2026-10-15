@@ -276,9 +276,9 @@ end = "\n          PY\n          )\"\n"
 code = workflow.split(start, 1)[1].split(end, 1)[0]
 code = "\n".join(line.removeprefix("          ") for line in code.splitlines())
 sample = (
-    "account=U12345678 host=10.20.30.40 user@example.com\n"
+    "account=U00000001 host=10.20.30.40 user@example.com\n"
     "network=2001:db8::1 scoped=fe80::1%eth0 punctuation=10.20.30.40.\n"
-    "paper_account=DU7654321 advisor_account=F9876543\n"
+    "paper_account=DU0000001 advisor_account=F0000001\n"
     "TOTP_SECRET=JBSWY3DPEHPK3PXP\n"
     "Authorization: Bearer header.payload.signature\n"
     'json={"access_token":"json-secret","other":1}\n'
@@ -292,9 +292,9 @@ result = subprocess.run(
     check=True,
     text=True,
 )
-assert "account=U***5678 host=<IP> <EMAIL>" in result.stdout
+assert "account=U***0001 host=<IP> <EMAIL>" in result.stdout
 assert "network=<IP> scoped=<IP> punctuation=<IP>." in result.stdout
-assert "paper_account=DU***4321 advisor_account=F***6543" in result.stdout
+assert "paper_account=DU***0001 advisor_account=F***0001" in result.stdout
 assert "TOTP_SECRET=<REDACTED>" in result.stdout
 assert "Authorization: <REDACTED>" in result.stdout
 assert 'json={"access_token":<REDACTED>' in result.stdout
@@ -302,9 +302,9 @@ assert '"cookie": <REDACTED>' in result.stdout
 assert "Security code: <REDACTED>" in result.stdout
 assert "\n\n" not in result.stdout
 for sensitive in (
-    "U12345678",
-    "DU7654321",
-    "F9876543",
+    "U00000001",
+    "DU0000001",
+    "F0000001",
     "10.20.30.40",
     "2001:db8::1",
     "fe80::1%eth0",
@@ -385,7 +385,7 @@ def classify(log_text: str) -> subprocess.CompletedProcess[str]:
             text=True,
         )
 
-sensitive = "TOTP_SECRET=do-not-print account=U12345678"
+sensitive = "TOTP_SECRET=do-not-print account=U00000001"
 recovery = classify(f"{sensitive}\nGATEWAY_RECOVERY_FAILURE_STAGE=GATEWAY_UI_BLOCKER\n")
 assert recovery.stdout.strip() == "GATEWAY_RECOVERY_FAILURE_STAGE=GATEWAY_UI_BLOCKER"
 assert sensitive not in recovery.stdout
