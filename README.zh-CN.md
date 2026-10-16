@@ -82,6 +82,11 @@ python -m pytest -q
 
 - 暂无独立 `docs/` 目录；请先阅读本 README 和 workflow 文件。
 
+## QSL 兼容性
+
+- `qsl.toml` 记录 `tier`、`upgrade_ring` 和 `compat.bundle`，用于兼容性检查。
+- 这个 Gateway 运维工具从 `requirements.txt` 安装 Python 依赖。
+
 ## 社区和安全
 
 - 贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)，确认 PR 范围、本地校验和文档要求。
