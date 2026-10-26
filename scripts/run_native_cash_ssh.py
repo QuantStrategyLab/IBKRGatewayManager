@@ -13,7 +13,7 @@ import sys
 import tempfile
 from uuid import UUID, uuid4
 
-from scripts.read_native_cash import TAGS, request_value, result
+from scripts.read_native_cash import TAGS, request_value, result, saved_result
 
 
 def main():
@@ -31,8 +31,13 @@ def main():
             raise ValueError()
         if env.get("IB_GATEWAY_MODE") not in ("live","paper"):
             raise ValueError()
+        capture_id, digest = env.get('SAVED_CAPTURE_ID',''), env.get('SAVED_EVIDENCE_SHA256','')
         request = request_value(dict(account_ids=json.loads(env["EXPECTED_ACCOUNT_SELECTOR_JSON"]),
-            port=4001 if env["IB_GATEWAY_MODE"]=="live" else 4002,capture_id=str(uuid4())))
+            port=4001 if env["IB_GATEWAY_MODE"]=="live" else 4002,capture_id=capture_id or str(uuid4())))
+        if capture_id or digest:
+            if not capture_id or not re.fullmatch(r'[0-9a-f]{64}',digest):raise ValueError()
+            request.pop('port')
+            request['evidence_sha256']=digest
         key=Path(env["SSH_KEY_FILE"])
         if not key.is_file() or key.stat().st_mode & 0o077:
             raise ValueError()
@@ -71,6 +76,8 @@ def main():
 
 
 def valid_safe_result(value):
+    if isinstance(value,dict) and value.get('schema_version')=='ibkr.saved_native_cash_inventory_result.v1':
+        return valid_saved_result(value)
     if not isinstance(value,dict) or set(value)!=set(result()):
         return False
     if value['schema_version'] != 'ibkr.native_cash_inventory_result.v1':
@@ -112,6 +119,38 @@ def valid_safe_result(value):
             or any(type(code) is not int or not 0<=code<=99999 for code in value['native_error_codes'])):return False
     return (isinstance(value['usd_field_states'],dict) and set(value['usd_field_states'])==set(TAGS)
             and all(state in ('OBSERVED','MISSING','INVALID','AMBIGUOUS') for state in value['usd_field_states'].values()))
+
+
+def valid_saved_result(value):
+    if set(value)!=set(saved_result()) or value['status'] not in ('observed','unavailable'):
+        return False
+    if value['reason'] not in ('saved_evidence_invalid','saved_inventory_readback_verified','native_read_failed'):
+        return False
+    for key in ('account_matched','saved_readback_verified','native_connection_attempted',
+                'spendable_cash_verified','complete_cash_obligations_verified',
+                'execution_authorized','production_configuration_changed'):
+        if type(value[key]) is not bool:return False
+    for key in ('native_connection_attempted','spendable_cash_verified','complete_cash_obligations_verified',
+                'execution_authorized','production_configuration_changed'):
+        if value[key] is not False:return False
+    try:
+        if value['capture_id'] is not None and str(UUID(value['capture_id']))!=value['capture_id']:return False
+    except (ValueError,TypeError,AttributeError):return False
+    if (value['source_started_at'] is not None and (not isinstance(value['source_started_at'],str)
+            or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T[0-9:.]+\+00:00',value['source_started_at']))):return False
+    if value['evidence_sha256'] is not None and not re.fullmatch(r'[0-9a-f]{64}',value['evidence_sha256']):return False
+    if value['status']=='observed' and (value['reason']!='saved_inventory_readback_verified'
+            or not value['account_matched'] or not value['saved_readback_verified']
+            or any(value[key] is None for key in ('capture_id','source_started_at','evidence_sha256'))):return False
+    if not isinstance(value['settled_tag_inventory'],list) or len(value['settled_tag_inventory'])>5000:return False
+    for field in value['settled_tag_inventory']:
+        if (not isinstance(field,dict) or set(field)!={'tag','currency','row_count','numeric_rows'}
+                or not isinstance(field['tag'],str) or 'settled' not in field['tag'].lower()
+                or not re.fullmatch(r'[A-Za-z$][A-Za-z0-9$_.:-]{0,63}',field['tag'])
+                or not isinstance(field['currency'],str) or not re.fullmatch(r'(?:[A-Z]{3}|BASE|)',field['currency'])
+                or type(field['row_count']) is not int or type(field['numeric_rows']) is not int
+                or not 0<=field['numeric_rows']<=field['row_count']<=5000):return False
+    return True
 
 
 if __name__=='__main__':

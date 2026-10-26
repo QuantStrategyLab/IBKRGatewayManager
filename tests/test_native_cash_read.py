@@ -1,14 +1,18 @@
 import asyncio
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
 import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from scripts.read_native_cash import ReadError, field_states, guard_send, observe, request_value, result, save_private
+from scripts.read_native_cash import (ReadError, field_states, guard_send, main, observe,
+    read_saved_inventory, request_value, result, save_private, saved_result)
 from scripts.run_native_cash_ssh import valid_safe_result
 
 ACCOUNT='U1234567'
@@ -107,6 +111,43 @@ class NativeCashTests(unittest.TestCase):
         self.assertFalse(valid_safe_result({**out,'usd_field_states':{'SettledCash':'90.125'}}))
         for key in ('execution_authorized','spendable_cash_verified','complete_cash_obligations_verified'):
             self.assertFalse(valid_safe_result({**out,key:True}))
+
+    def test_saved_inventory_uses_exact_private_file_without_sdk_or_native_connection(self):
+        payload=asyncio.run(observe(FakeIB(),REQUEST,result()))
+        with tempfile.TemporaryDirectory() as folder:
+            directory=Path(folder)/('qsl-native-cash-'+REQUEST['capture_id']+'-fixture')
+            directory.mkdir(mode=0o700)
+            digest=save_private(directory,payload)
+            request=dict(account_ids=[ACCOUNT],capture_id=REQUEST['capture_id'],evidence_sha256=digest)
+            output=io.StringIO()
+            with (patch('tempfile.gettempdir',return_value=folder),patch('sys.platform','linux'),
+                  patch('importlib.metadata.version',side_effect=AssertionError('SDK must not load')) as sdk,
+                  patch('sys.stdin',SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))),
+                  redirect_stdout(output)):
+                self.assertEqual(main(),0)
+                sdk.assert_not_called()
+            out=json.loads(output.getvalue())
+            self.assertTrue(valid_safe_result(out))
+            self.assertFalse(out['native_connection_attempted'])
+            self.assertEqual(out['settled_tag_inventory'],[
+                dict(tag='OtherSettledCash',currency='BASE',row_count=1,numeric_rows=1),
+                dict(tag='SettledCash',currency='USD',row_count=1,numeric_rows=1)])
+            self.assertNotIn(ACCOUNT,output.getvalue());self.assertNotIn('90.125',output.getvalue())
+            with patch('tempfile.gettempdir',return_value=folder):
+                for update in ({'evidence_sha256':'0'*64},{'account_ids':['U7654321']},
+                               {'capture_id':'12345678-1234-4234-8234-123456789abd'}):
+                    with self.subTest(update=update),self.assertRaises(ReadError):
+                        read_saved_inventory({**request,**update})
+                (directory/'observation.json').chmod(0o644)
+                with self.assertRaises(ReadError):read_saved_inventory(request)
+
+    def test_saved_inventory_validator_rejects_raw_values_and_false_qualification(self):
+        out=saved_result();self.assertTrue(valid_safe_result(out))
+        self.assertFalse(valid_safe_result({**out,'account_id':ACCOUNT}))
+        self.assertFalse(valid_safe_result({**out,'status':'observed'}))
+        self.assertFalse(valid_safe_result({**out,'native_connection_attempted':True}))
+        self.assertFalse(valid_safe_result({**out,'settled_tag_inventory':[
+            dict(tag='SettledCash',currency='USD',row_count=1,numeric_rows=1,value='90.125')]}))
 
 
 if __name__=='__main__':unittest.main()
