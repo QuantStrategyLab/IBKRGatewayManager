@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import redirect_stdout
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -13,7 +14,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from scripts.read_native_cash import (ReadError, field_states, guard_send, main, observe,
     read_saved_inventory, request_value, result, save_private, saved_result, value_shape)
-from scripts.run_native_cash_ssh import valid_safe_result
+from scripts.run_native_cash_ssh import remote_program, valid_safe_result
 
 ACCOUNT='U1234567'
 REQUEST=dict(account_ids=[ACCOUNT],port=4001,capture_id='12345678-1234-4234-8234-123456789abc')
@@ -167,6 +168,29 @@ class NativeCashTests(unittest.TestCase):
         bad={**out,'settlement_schedule_inventory':[
             dict(tag='SettledCashByDate',currency='USD',row_count=1,raw_rows=1,value_shapes=[raw])]}
         self.assertFalse(valid_safe_result(bad))
+
+    def test_compact_transport_reconstructs_exact_source_and_keeps_binding_on_stdin(self):
+        source=(ROOT/'scripts/read_native_cash.py').read_text()
+        remote=remote_program('gateway',source,REQUEST)
+        self.assertLess(len(remote.encode()),16384)
+        safe=saved_result()
+        with (patch('subprocess.run',return_value=SimpleNamespace(stdout=json.dumps(safe).encode())) as child,
+              redirect_stdout(io.StringIO())):
+            exec(compile(remote,'<synthetic-remote>','exec'),{})
+        args=child.call_args.args[0]
+        self.assertEqual(args[:7],['sudo','-n','docker','exec','-i','gateway','python3'])
+        self.assertEqual(args[-2:],['-c',source])
+        self.assertEqual(json.loads(child.call_args.kwargs['input']),REQUEST)
+        self.assertNotIn(ACCOUNT,' '.join(args))
+        self.assertEqual(child.call_args.kwargs['timeout'],65)
+
+    def test_compact_transport_rejects_changed_source_before_execution(self):
+        source=(ROOT/'scripts/read_native_cash.py').read_text()
+        remote=remote_program('gateway',source,REQUEST)
+        remote=remote.replace(hashlib.sha256(source.encode()).hexdigest(),'0'*64)
+        with patch('subprocess.run') as child,self.assertRaisesRegex(ValueError,'public_source_digest_mismatch'):
+            exec(compile(remote,'<synthetic-remote>','exec'),{})
+        child.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()
