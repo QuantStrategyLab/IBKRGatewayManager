@@ -3,6 +3,8 @@ from contextlib import redirect_stdout
 import hashlib
 import io
 import json
+import tarfile
+from decimal import Decimal
 from pathlib import Path
 import sys
 import tempfile
@@ -13,8 +15,9 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from scripts.read_native_cash import (ReadError, field_states, guard_send, main, observe,
-    read_saved_inventory, request_value, result, save_private, saved_result, value_shape)
-from scripts.run_native_cash_ssh import remote_program, valid_safe_result
+    inspect_saved_schedule, read_saved_inventory, request_value, result, save_private,
+    save_private_bytes, saved_result, schedule_pair, value_shape)
+from scripts.run_native_cash_ssh import remote_program, retain_saved_on_host, valid_safe_result
 
 ACCOUNT='U1234567'
 REQUEST=dict(account_ids=[ACCOUNT],port=4001,capture_id='12345678-1234-4234-8234-123456789abc')
@@ -191,6 +194,126 @@ class NativeCashTests(unittest.TestCase):
         with patch('subprocess.run') as child,self.assertRaisesRegex(ValueError,'public_source_digest_mismatch'):
             exec(compile(remote,'<synthetic-remote>','exec'),{})
         child.assert_not_called()
+
+    def test_schedule_syntax_does_not_choose_a_date_or_offset(self):
+        for raw,shape in [('0:1.25','ZERO_KEY'),('2:-1.25','INTEGER_KEY'),
+                          ('20991231:1.25','CALENDAR_DATE_SHAPED'),
+                          ('20260230:1.25','INVALID_CALENDAR_DATE_SHAPED')]:
+            with self.subTest(raw=raw):
+                status,key_shape,pair=schedule_pair(raw)
+                self.assertEqual((status,key_shape),('SINGLE_PAIR',shape))
+                self.assertIsInstance(pair[1],Decimal)
+                out=inspect_saved_schedule([dict(tag='SettledCashByDate',currency='USD',value=None,raw_value=raw)])
+                self.assertFalse(out['date_key_semantics_verified'])
+                self.assertFalse(out['current_settlement_selected'])
+                self.assertFalse(out['settled_cash_equivalence_verified'])
+        for raw,status in [(None,'RAW_NOT_PRESERVED'),('','EMPTY'),('0:1;1:2','UNSUPPORTED_FORMAT'),
+                           ('0:NaN','UNSUPPORTED_FORMAT'),('0:Infinity','UNSUPPORTED_FORMAT'),
+                           ('0:1,200','UNSUPPORTED_FORMAT'),('0:'+'1'*4097,'INVALID_NUMBER')]:
+            with self.subTest(raw_kind=status):self.assertEqual(schedule_pair(raw)[0],status)
+
+    def test_saved_segment_arithmetic_is_exact_and_currency_scoped(self):
+        rows=[]
+        def add(tag,raw,currency='USD'):
+            rows.append(dict(tag=tag,currency=currency,value=None,raw_value=raw))
+        add('SettledCashByDate','0:100.000000000000000000000000000001')
+        add('SettledCashByDate-C','0:0.000000000000000000000000000001')
+        add('SettledCashByDate-S','0:100')
+        rows.append(dict(tag='$LEDGER-CashBalance',currency='USD',value='100.000000000000000000000000000001'))
+        for tag,raw in [('SettledCashByDate','0:3'),('SettledCashByDate-C','0:1'),('SettledCashByDate-S','0:2')]:add(tag,raw,'BASE')
+        out=inspect_saved_schedule(rows)
+        relationships={row['currency']:row for row in out['relationships']}
+        self.assertEqual(relationships['USD']['segment_consistency'],'SAME_KEY_TOTAL_EQUALS_SEGMENTS')
+        self.assertEqual(relationships['USD']['same_capture_ledger_relation'],'EQUAL')
+        self.assertEqual(relationships['BASE']['same_capture_ledger_relation'],'UNKNOWN')
+        self.assertNotIn('100.000000000000000000000000000001',json.dumps(out))
+        rows[1]['raw_value']='1:0.000000000000000000000000000001'
+        self.assertEqual(inspect_saved_schedule(rows)['relationships'][1]['segment_consistency'],'KEYS_DIFFER')
+        rows[1]['raw_value']='0:2'
+        self.assertEqual(inspect_saved_schedule(rows)['relationships'][1]['segment_consistency'],'SAME_KEY_TOTAL_DIFFERS')
+        rows.append(dict(rows[0]))
+        self.assertEqual(inspect_saved_schedule(rows)['fields'][1]['syntax_status'],'REPEATED_CONSISTENT_PAIR')
+        rows[-1]['raw_value']='0:999'
+        self.assertEqual(inspect_saved_schedule(rows)['fields'][1]['syntax_status'],'AMBIGUOUS_ROWS')
+
+    def test_saved_structure_cannot_leak_values_or_certify_cash(self):
+        out=saved_result()
+        out['settlement_structure']=inspect_saved_schedule([
+            dict(tag='SettledCashByDate',currency='USD',value=None,raw_value='0:-1.25')])
+        self.assertTrue(valid_safe_result(out))
+        for key in ('date_key_semantics_verified','settled_cash_equivalence_verified','current_settlement_selected'):
+            changed={**out,'settlement_structure':{**out['settlement_structure'],key:True}}
+            self.assertFalse(valid_safe_result(changed))
+        out['settlement_structure']['fields'][0]['value']='-1.25'
+        self.assertFalse(valid_safe_result(out))
+
+    def test_host_retention_copies_exact_bytes_once_without_stdout_or_native_connection(self):
+        body=b'{"synthetic":true,"amount":"1.25"}'
+        request=dict(account_ids=[ACCOUNT],capture_id=REQUEST['capture_id'],evidence_sha256=hashlib.sha256(body).hexdigest())
+        archive=io.BytesIO()
+        with tarfile.open(fileobj=archive,mode='w') as tar:
+            entry=tarfile.TarInfo('observation.json');entry.size=len(body)
+            tar.addfile(entry,io.BytesIO(body))
+        found=SimpleNamespace(returncode=0,stdout=('/tmp/qsl-native-cash-'+REQUEST['capture_id']+'-fixture/observation.json\n').encode())
+        copied=SimpleNamespace(returncode=0,stdout=archive.getvalue())
+        output=io.StringIO()
+        with tempfile.TemporaryDirectory() as folder,patch('pathlib.Path.home',return_value=Path(folder)):
+            with patch('subprocess.run',side_effect=[found,copied]) as child,redirect_stdout(output):
+                digest=retain_saved_on_host('gateway',request,save_private_bytes)
+            self.assertEqual(digest,request['evidence_sha256']);self.assertEqual(output.getvalue(),'')
+            args=' '.join(' '.join(call.args[0]) for call in child.call_args_list)
+            self.assertNotIn(ACCOUNT,args);self.assertNotIn('1.25',args)
+            path=Path(folder)/'.qsl-native-cash-evidence'/request['capture_id']/'observation.json'
+            self.assertEqual(path.read_bytes(),body)
+            self.assertEqual(path.stat().st_mode&0o777,0o600)
+            self.assertEqual(path.parent.stat().st_mode&0o777,0o700)
+            with patch('subprocess.run') as child:
+                self.assertEqual(retain_saved_on_host('gateway',request,save_private_bytes),digest)
+                child.assert_not_called()
+            path.write_bytes(b'conflicting-private-evidence')
+            with self.assertRaisesRegex(ValueError,'digest_mismatch'):
+                retain_saved_on_host('gateway',request,save_private_bytes)
+            self.assertEqual(path.read_bytes(),b'conflicting-private-evidence')
+
+    def test_host_retention_rejects_unsafe_archive_and_requires_saved_mode(self):
+        source=(ROOT/'scripts/read_native_cash.py').read_text()
+        with self.assertRaisesRegex(ValueError,'retention_requires_saved_read'):
+            remote_program('gateway',source,REQUEST,retain_on_host=True)
+        request=dict(account_ids=[ACCOUNT],capture_id=REQUEST['capture_id'],evidence_sha256='0'*64)
+        archive=io.BytesIO()
+        with tarfile.open(fileobj=archive,mode='w') as tar:
+            entry=tarfile.TarInfo('observation.json');entry.type=tarfile.SYMTYPE;entry.linkname='/etc/passwd'
+            tar.addfile(entry)
+        found=SimpleNamespace(returncode=0,stdout=('/tmp/qsl-native-cash-'+REQUEST['capture_id']+'-fixture/observation.json\n').encode())
+        copied=SimpleNamespace(returncode=0,stdout=archive.getvalue())
+        with tempfile.TemporaryDirectory() as folder,patch('pathlib.Path.home',return_value=Path(folder)):
+            with patch('subprocess.run',side_effect=[found,copied]),self.assertRaisesRegex(ValueError,'archive_invalid'):
+                retain_saved_on_host('gateway',request,save_private_bytes)
+            self.assertFalse((Path(folder)/'.qsl-native-cash-evidence'/request['capture_id']).exists())
+
+    def test_remote_retention_failure_emits_fixed_reason_without_raw_body(self):
+        source=(ROOT/'scripts/read_native_cash.py').read_text()
+        request=dict(account_ids=[ACCOUNT],capture_id=REQUEST['capture_id'],evidence_sha256='0'*64)
+        safe=saved_result()
+        safe.update(status='observed',reason='saved_inventory_readback_verified',
+            capture_id=request['capture_id'],evidence_sha256=request['evidence_sha256'],
+            source_started_at=result()['started_at'],account_matched=True,saved_readback_verified=True,
+            settlement_structure=inspect_saved_schedule([]))
+        collector=SimpleNamespace(returncode=0,stdout=json.dumps(safe).encode())
+        failed=SimpleNamespace(returncode=1,stdout=b'',stderr=b'private source '+ACCOUNT.encode())
+        output=io.StringIO()
+        remote=remote_program('gateway',source,request,retain_on_host=True)
+        self.assertLess(len(remote.encode()),16384)
+        with (tempfile.TemporaryDirectory() as folder,patch('pathlib.Path.home',return_value=Path(folder)),
+              patch('subprocess.run',side_effect=[collector,failed]),redirect_stdout(output)):
+            exec(compile(remote,'<synthetic-remote>','exec'),{})
+        out=json.loads(output.getvalue())
+        self.assertTrue(valid_safe_result(out));self.assertTrue(out['saved_readback_verified'])
+        self.assertEqual(out['existing_host_retention_status'],'UNAVAILABLE')
+        self.assertEqual(out['existing_host_retention_reason'],'retention_source_unavailable')
+        self.assertFalse(out['existing_host_readback_verified'])
+        self.assertFalse(out['native_connection_attempted'])
+        self.assertNotIn(ACCOUNT,output.getvalue());self.assertNotIn('private source',output.getvalue())
 
 
 if __name__=='__main__':unittest.main()

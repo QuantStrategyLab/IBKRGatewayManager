@@ -11,6 +11,11 @@ on:
         description: Exact saved observation digest for inventory-only readback
         required: false
         type: string
+      retain_saved_on_host:
+        description: Retain this digest-bound saved observation on the existing private host disk
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -27,6 +32,7 @@ jobs:
     env:
       SAVED_CAPTURE_ID: ${{ inputs.saved_capture_id }}
       SAVED_EVIDENCE_SHA256: ${{ inputs.saved_evidence_sha256 }}
+      RETAIN_SAVED_ON_HOST: ${{ inputs.retain_saved_on_host }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -49,6 +55,7 @@ jobs:
               const capture = process.env.SAVED_CAPTURE_ID || '';
               const digest = process.env.SAVED_EVIDENCE_SHA256 || '';
               if ((capture || digest) && (!/^[0-9a-f-]{36}$/.test(capture) || !/^[0-9a-f]{64}$/.test(digest))) throw Error();
+              if (process.env.RETAIN_SAVED_ON_HOST === 'true' && (!capture || !digest)) throw Error();
               const index = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
               const raw = JSON.parse(process.env.TARGETS);
               const targets = Array.isArray(raw) ? raw : Object.entries(raw).map(([name,v]) => ({...v,name}));

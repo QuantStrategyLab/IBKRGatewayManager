@@ -10,6 +10,7 @@ import asyncio
 from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 import hashlib
 import importlib.metadata
 import json
@@ -114,6 +115,10 @@ def guard_send(original, expected_account, client_id):
 
 def save_private(directory, payload):
     body = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    return save_private_bytes(directory, body)
+
+
+def save_private_bytes(directory, body):
     path = directory / "observation.json"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as stream:
@@ -125,12 +130,85 @@ def save_private(directory, payload):
     return hashlib.sha256(body).hexdigest()
 
 
+def schedule_pair(raw):
+    """Recognize the observed single key:number syntax, not its cash meaning.
+
+    Do not infer a date, offset, current item or multi-entry delimiter. Values
+    returned here stay private and are used only for exact consistency checks.
+    """
+    if not isinstance(raw, str):
+        return "RAW_NOT_PRESERVED", "UNKNOWN", None
+    if not raw:
+        return "EMPTY", "UNKNOWN", None
+    match = re.fullmatch(r"(-?[0-9]{1,16}):([+-]?[0-9]+(?:\.[0-9]+)?)", raw)
+    if not match or len(raw) > 16384:
+        return "UNSUPPORTED_FORMAT", "UNKNOWN", None
+    key, text = match.groups()
+    amount = decimal_text(text)
+    if amount is None:
+        return "INVALID_NUMBER", "UNKNOWN", None
+    shape = "ZERO_KEY" if key == "0" else "INTEGER_KEY"
+    if re.fullmatch(r"[0-9]{8}", key):
+        try:
+            datetime.strptime(key, "%Y%m%d")
+        except ValueError:
+            shape = "INVALID_CALENDAR_DATE_SHAPED"
+        else:
+            shape = "CALENDAR_DATE_SHAPED"
+    return "SINGLE_PAIR", shape, (key, Decimal(amount))
+
+
+def inspect_saved_schedule(rows):
+    """Emit value-free syntax and arithmetic; none certifies settled cash."""
+    fields, pairs = [], {}
+    groups = sorted({(row["tag"], row["currency"]) for row in rows if row["tag"] in SCHEDULE_TAGS})
+    for tag, currency in groups:
+        selected = [row for row in rows if row["tag"] == tag and row["currency"] == currency]
+        parsed = [schedule_pair(row.get("raw_value")) for row in selected]
+        if len(selected) != 1 and parsed[0][0] == "SINGLE_PAIR" and all(item == parsed[0] for item in parsed):
+            status, shape, pair = parsed[0]
+            status = "REPEATED_CONSISTENT_PAIR"
+            pairs[tag, currency] = pair
+        elif len(selected) != 1:
+            status, shape = "AMBIGUOUS_ROWS", "UNKNOWN"
+        else:
+            status, shape, pair = parsed[0]
+            if pair is not None:
+                pairs[tag, currency] = pair
+        fields.append(dict(tag=tag, currency=currency, row_count=len(selected),
+                           syntax_status=status, key_shape=shape))
+    relationships = []
+    for currency in sorted({currency for _, currency in groups}):
+        group = [pairs.get((tag, currency)) for tag in SCHEDULE_TAGS]
+        segment_state, ledger_state = "INCOMPLETE_OR_INVALID", "UNKNOWN"
+        if all(pair is not None for pair in group):
+            if len({pair[0] for pair in group}) != 1:
+                segment_state = "KEYS_DIFFER"
+            elif Fraction(group[0][1]) == Fraction(group[1][1]) + Fraction(group[2][1]):
+                segment_state = "SAME_KEY_TOTAL_EQUALS_SEGMENTS"
+            else:
+                segment_state = "SAME_KEY_TOTAL_DIFFERS"
+        ledger = [row["value"] for row in rows
+                  if row["tag"] == "$LEDGER-CashBalance" and row["currency"] == currency]
+        if (group[0] is not None and len(ledger) == 1 and ledger[0] is not None
+                and decimal_text(ledger[0]) is not None):
+            ledger_state = "EQUAL" if group[0][1] == Decimal(ledger[0]) else "DIFFERENT"
+        relationships.append(dict(currency=currency, segment_consistency=segment_state,
+                                   same_capture_ledger_relation=ledger_state))
+    return dict(scope="SAVED_SAME_CAPTURE_SYNTAX_AND_ARITHMETIC_ONLY", fields=fields,
+        relationships=relationships, date_key_semantics_verified=False,
+        settled_cash_equivalence_verified=False, current_settlement_selected=False)
+
+
 def saved_result():
     return dict(schema_version="ibkr.saved_native_cash_inventory_result.v1",
         status="unavailable", reason="saved_evidence_invalid", capture_id=None,
         source_started_at=None, evidence_sha256=None, account_matched=False,
         saved_readback_verified=False, native_connection_attempted=False,
-        settled_tag_inventory=[], spendable_cash_verified=False,
+        settled_tag_inventory=[], settlement_structure=None, spendable_cash_verified=False,
+        existing_host_retention_status="NOT_REQUESTED", existing_host_readback_verified=False,
+        existing_host_evidence_sha256=None, existing_host_retention_reason=None,
+        durable_cloud_store_verified=False,
         complete_cash_obligations_verified=False, execution_authorized=False,
         production_configuration_changed=False)
 
@@ -190,7 +268,8 @@ def read_saved_inventory(request):
     out.update(status="observed", reason="saved_inventory_readback_verified",
         capture_id=request["capture_id"], source_started_at=payload["started_at"],
         evidence_sha256=request["evidence_sha256"], account_matched=True,
-        saved_readback_verified=True, settled_tag_inventory=inventory)
+        saved_readback_verified=True, settled_tag_inventory=inventory,
+        settlement_structure=inspect_saved_schedule(payload["cash_rows"]))
     return out
 
 
