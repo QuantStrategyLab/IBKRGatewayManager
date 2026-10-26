@@ -3,6 +3,11 @@ name: Read Native Cash From Existing Gateway
 on:
   workflow_dispatch:
     inputs:
+      runtime_preflight:
+        description: Inspect existing host image/package metadata only; no broker connection or pilot launch
+        required: false
+        default: false
+        type: boolean
       saved_capture_id:
         description: Optional saved capture UUID (requires its digest; makes no broker connection)
         required: false
@@ -30,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
+      RUNTIME_PREFLIGHT: ${{ inputs.runtime_preflight }}
       SAVED_CAPTURE_ID: ${{ inputs.saved_capture_id }}
       SAVED_EVIDENCE_SHA256: ${{ inputs.saved_evidence_sha256 }}
       RETAIN_SAVED_ON_HOST: ${{ inputs.retain_saved_on_host }}
@@ -54,6 +60,7 @@ jobs:
             try {
               const capture = process.env.SAVED_CAPTURE_ID || '';
               const digest = process.env.SAVED_EVIDENCE_SHA256 || '';
+              if (process.env.RUNTIME_PREFLIGHT === 'true' && (capture || digest || process.env.RETAIN_SAVED_ON_HOST === 'true')) throw Error();
               if ((capture || digest) && (!/^[0-9a-f-]{36}$/.test(capture) || !/^[0-9a-f]{64}$/.test(digest))) throw Error();
               if (process.env.RETAIN_SAVED_ON_HOST === 'true' && (!capture || !digest)) throw Error();
               const index = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
@@ -129,7 +136,7 @@ jobs:
           fi
           echo "SSH_KEY_FILE=${key_file}" >>"${GITHUB_ENV}"
 
-      - name: Read native data or inspect one saved inventory without a broker connection
+      - name: Read native data, inspect saved inventory or preflight existing runtime
         run: python3 -m scripts.run_native_cash_ssh
 
       - name: Remove this runner's temporary SSH key

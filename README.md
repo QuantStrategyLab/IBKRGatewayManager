@@ -143,6 +143,16 @@ broker. A requested retention failure fails the job while preserving the
 separate saved-read result. No permission, storage service or Gateway deployment
 is created.
 
+The same workflow accepts `runtime_preflight=true` for a metadata-only check of
+the protected matched host. It is exclusive with saved-capture and retention
+inputs. It checks existing Docker image source labels, installed distribution
+metadata in the running Gateway container, and available host memory/disk.
+It never pulls or launches an image, imports a broker/strategy package, reads
+container configuration, connects to a broker, or changes software or state.
+Only fixed states and resource counts leave Linux. Candidate image labels are
+not source verification, missing container packages do not describe other
+environments, and the result never grants runtime or trading readiness.
+
 ## Repository layout
 
 - `tests/`: unit, contract, and regression tests.
