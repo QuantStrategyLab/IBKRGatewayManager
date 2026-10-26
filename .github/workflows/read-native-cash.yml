@@ -1,0 +1,120 @@
+name: Read Native Cash From Existing Gateway
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: read-only-gateway-vm-metadata-match-current
+  cancel-in-progress: false
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Bind the existing protected target and expected account
+        id: target
+        uses: actions/github-script@v8
+        env:
+          TARGETS: ${{ secrets.IB_GATEWAY_TARGETS_JSON }}
+          MATCHED_INDEX: ${{ secrets.IB_GATEWAY_MATCHED_INDEX }}
+          EXPECTED_ACCOUNT_SELECTOR_JSON: ${{ secrets.IB_GATEWAY_EXPECTED_ACCOUNT_SELECTOR_JSON }}
+        with:
+          script: |
+            if (context.ref !== 'refs/heads/main' || process.env.GITHUB_RUN_ATTEMPT !== '1') {
+              core.setFailed('One first-attempt main dispatch is required'); return;
+            }
+            const {parseProtectedGatewayIndex} = require(`${process.env.GITHUB_WORKSPACE}/scripts/parse_protected_gateway_index.cjs`);
+            try {
+              const index = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
+              const raw = JSON.parse(process.env.TARGETS);
+              const targets = Array.isArray(raw) ? raw : Object.entries(raw).map(([name,v]) => ({...v,name}));
+              const accounts = JSON.parse(process.env.EXPECTED_ACCOUNT_SELECTOR_JSON);
+              if (targets.length !== 4 || index === undefined || !Array.isArray(accounts)
+                  || accounts.length !== 1 || !/^(U|DU)[0-9]+$/.test(accounts[0])) throw Error();
+              const t = targets[index];
+              const values = {
+                GCP_PROJECT_ID:t.gcp_project_id,
+                GCP_WORKLOAD_IDENTITY_PROVIDER:t.gcp_workload_identity_provider,
+                GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT:t.gcp_workload_identity_service_account,
+                GCE_INSTANCE_NAME:t.gce_instance_name, GCE_ZONE:t.gce_zone, GCE_USER:t.gce_user,
+                IB_GATEWAY_CONTAINER_NAME:t.container_name, IB_GATEWAY_MODE:t.mode,
+                SSH_PRIVATE_KEY_SECRET_NAME:t.ssh_private_key_secret_name,
+                GCP_SECRET_PROJECT_ID:t.gcp_secret_project_id || t.gcp_project_id,
+              };
+              if (Object.values(values).some(v => typeof v !== 'string' || !v.trim())
+                  || !['live','paper'].includes(t.mode)) throw Error();
+              for (const [k,v] of Object.entries(values)) { core.setSecret(v); core.exportVariable(k,v); }
+              core.setSecret(process.env.EXPECTED_ACCOUNT_SELECTOR_JSON);
+              core.setSecret(accounts[0]);
+              core.exportVariable('EXPECTED_ACCOUNT_SELECTOR_JSON', process.env.EXPECTED_ACCOUNT_SELECTOR_JSON);
+              core.setOutput('provider',t.gcp_workload_identity_provider);
+              core.setOutput('service_account',t.gcp_workload_identity_service_account);
+              core.setOutput('target_index',String(index));
+              core.info('native_cash_target_configuration_verified=true');
+            } catch { core.setFailed('Protected target/account binding unavailable'); }
+
+      - name: Authenticate using the existing target identity
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ steps.target.outputs.provider }}
+          service_account: ${{ steps.target.outputs.service_account }}
+        env:
+          NODE_OPTIONS: --require=${{ github.workspace }}/scripts/filter_github_action_auth_logs.cjs
+
+      - uses: google-github-actions/setup-gcloud@v3
+        env:
+          NODE_OPTIONS: --require=${{ github.workspace }}/scripts/filter_github_action_auth_logs.cjs
+
+      - name: Verify the exact existing VM and prepare its existing SSH key
+        env:
+          IB_GATEWAY_EXPECTED_HOST: ${{ secrets.IB_GATEWAY_EXPECTED_HOST }}
+          TARGET_INDEX: ${{ steps.target.outputs.target_index }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          metadata="$(mktemp)"
+          error_file="$(mktemp)"
+          key_file="$(mktemp "${RUNNER_TEMP}/native-gateway-key.XXXXXX")"
+          trap 'rm -f "${metadata}" "${error_file}"' EXIT
+          if ! gcloud compute instances describe "${GCE_INSTANCE_NAME}" \
+            --project="${GCP_PROJECT_ID}" --zone="${GCE_ZONE}" --format=json \
+            >"${metadata}" 2>"${error_file}"; then
+            echo 'native_cash_target_verified=false'; exit 1
+          fi
+          if ! match_output="$(python3 scripts/match_gateway_metadata.py --metadata-file "${metadata}" \
+            --target-index "${TARGET_INDEX}")"; then exit 1; fi
+          printf '%s\n' "${match_output}"
+          if ! grep -qx 'GATEWAY_IP_MATCH_STATUS=match' <<<"${match_output}"; then exit 1; fi
+          if ! gcloud secrets versions access latest --project="${GCP_SECRET_PROJECT_ID}" \
+            --secret="${SSH_PRIVATE_KEY_SECRET_NAME}" >"${key_file}" 2>"${error_file}"; then
+            rm -f "${key_file}"
+            echo 'native_cash_credential_available=false'; exit 1
+          fi
+          if ! SSH_KEY_FILE="${key_file}" bash scripts/prepare_gateway_ssh_key.sh \
+            >/dev/null 2>"${error_file}"; then
+            rm -f "${key_file}"
+            echo 'native_cash_credential_valid=false'; exit 1
+          fi
+          echo "SSH_KEY_FILE=${key_file}" >>"${GITHUB_ENV}"
+
+      - name: Read one native account update and API order snapshot
+        run: python3 -m scripts.run_native_cash_ssh
+
+      - name: Remove this runner's temporary SSH key
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${SSH_KEY_FILE:-}" ]; then rm -f -- "${SSH_KEY_FILE}"; fi
+          for path in "${RUNNER_TEMP}"/native-gateway-key.*; do
+            [ ! -f "${path}" ] || rm -f -- "${path}"
+          done

@@ -79,6 +79,26 @@ observations do not establish authentication, cash completeness or spending
 authority. The original two-argument helper and its six-field output remain
 supported; the extended response is accepted only as one complete field group.
 
+The separate manual `Read Native Cash From Existing Gateway` workflow performs
+one active, bounded read on that protected target. Its expected single account
+comes from `IB_GATEWAY_EXPECTED_ACCOUNT_SELECTOR_JSON`, copied from the existing
+runtime's private selector rather than inferred from a target label. It verifies
+the existing VM address and the native managed account before requesting data.
+It uses the container's installed `ib_insync==0.9.86`; it does not install,
+restart, log in, deploy a container or create cloud resources. Native outgoing
+messages are restricted to API startup, selected-account updates (including
+unsubscribe) and all-client open-order reads; no summary, order write or auto-bind
+request is admitted. A random nonzero client ID avoids the SDK's client-zero
+manual-order binding path; a collision fails without retry.
+
+The workflow emits only fixed field states/counts and an evidence digest. Cash
+values and selected API orders stay in a new mode-0700 directory, with a
+create-only mode-0600 `observation.json`, inside the existing container's `/tmp`.
+Readback verifies those bytes locally. This is container-local evidence, not a
+durable cloud report; container replacement may remove it. Missing settlement
+fields, transfer obligations and durable storage remain explicit gaps. An empty
+API order result does not certify all account obligations or spending authority.
+
 ## Repository layout
 
 - `tests/`: unit, contract, and regression tests.
