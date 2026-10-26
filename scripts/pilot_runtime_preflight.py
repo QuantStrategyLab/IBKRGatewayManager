@@ -6,8 +6,13 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import base64
+import hashlib
+import urllib.error
+import urllib.request
 
 CANDIDATE = '15427acb0ecc5e4c2450adf5276f90625a32e01a'
+BASE_DIGEST = 'sha256:714c510974267e055d35dcb129a4ce2afc628b069daff1987127627d80573bd2'
 PIN_STATES = {'UNKNOWN', 'MISSING', 'MATCHED', 'MISMATCHED', 'UNVERIFIED', 'AMBIGUOUS'}
 REASONS = {'preflight_failed', 'request_invalid', 'container_metadata_failed',
            'image_metadata_failed', 'dependency_metadata_failed', 'host_resources_unavailable', 'metadata_observed'}
@@ -145,3 +150,98 @@ def valid_result(value):
                 'host_memory_available_mib', 'host_disk_free_mib', 'host_architecture'))
             and (not value['gateway_container_running'] or value['python_minor'] is not None))
     return value['reason'] != 'metadata_observed'
+
+
+def image_result():
+    return dict(schema_version='ibkr.pilot_image_access.v1', status='unavailable', reason='image_binding_invalid',
+        observed_at=datetime.now(timezone.utc).isoformat(), image_digest=BASE_DIGEST,
+        vm_token_obtained=False, manifest_http_status=None, manifest_digest_verified=False,
+        denial_reason=None, image_pull_attempted=False, runtime_started=False,
+        broker_called=False, configuration_changed=False)
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def read_request(request):
+    # Tokens never pass through a proxy or an HTTP redirect.
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open(request, timeout=8)
+
+
+def image_access(image, *, open_url=read_request):
+    out = image_result()
+    binding = re.fullmatch(r'(us-central1-docker\.pkg\.dev)/([a-z][a-z0-9-]{4,28}[a-z0-9]/[a-z0-9._/-]+)@'
+        + re.escape(BASE_DIGEST), image) if isinstance(image, str) else None
+    if binding is None or any(part in ('', '.', '..') for part in binding[2].split('/')) or len(binding[2].split('/')) < 3:
+        return out
+    stage = 'vm_token_unavailable'
+    try:
+        request = urllib.request.Request('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
+            headers={'Metadata-Flavor': 'Google'})
+        with open_url(request) as response:
+            if response.headers.get('Metadata-Flavor') != 'Google':
+                raise ValueError()
+            body = response.read(65537)
+        if len(body) > 65536:
+            raise ValueError()
+        token = json.loads(body).get('access_token')
+        if not isinstance(token, str) or not 0 < len(token) <= 8192:
+            raise ValueError()
+        out['vm_token_obtained'] = True
+        stage = 'manifest_read_failed'
+        authorization = base64.b64encode(('oauth2accesstoken:' + token).encode()).decode('ascii')
+        request = urllib.request.Request('https://' + binding[1] + '/v2/' + binding[2] + '/manifests/' + BASE_DIGEST,
+            headers={'Authorization': 'Basic ' + authorization,
+                'Accept': 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json'})
+        try:
+            with open_url(request) as response:
+                out['manifest_http_status'] = response.status
+                body = response.read(4_000_001)
+                digest = response.headers.get('Docker-Content-Digest')
+        except urllib.error.HTTPError as error:
+            out['manifest_http_status'] = error.code
+            if error.code in (401, 403):
+                detail = error.read(4096).decode('utf-8', errors='replace')
+                out.update(reason='registry_access_denied', denial_reason='insufficient_vm_scopes'
+                    if 'insufficient authentication scopes' in detail else 'artifact_download_permission'
+                    if 'artifactregistry.repositories.downloadArtifacts' in detail else 'unclassified')
+            else:
+                out['reason'] = 'registry_not_found' if error.code == 404 else stage
+            return out
+        stage = 'manifest_digest_mismatch'
+        if (out['manifest_http_status'] != 200 or not 0 < len(body) <= 4_000_000
+                or 'sha256:' + hashlib.sha256(body).hexdigest() != BASE_DIGEST
+                or digest is not None and digest != BASE_DIGEST):
+            raise ValueError()
+        out.update(status='observed', reason='manifest_verified', manifest_digest_verified=True)
+    except Exception:
+        out['reason'] = stage
+    return out
+
+
+def valid_image_result(value):
+    if not isinstance(value, dict) or set(value) != set(image_result()):
+        return False
+    if (value['schema_version'] != 'ibkr.pilot_image_access.v1' or value['image_digest'] != BASE_DIGEST
+            or value['status'] not in ('observed', 'unavailable')
+            or value['reason'] not in ('image_binding_invalid', 'vm_token_unavailable', 'manifest_read_failed',
+                'registry_access_denied', 'registry_not_found', 'manifest_digest_mismatch', 'manifest_verified')
+            or value['denial_reason'] not in (None, 'insufficient_vm_scopes', 'artifact_download_permission', 'unclassified')
+            or any(value[key] is not False for key in ('image_pull_attempted', 'runtime_started', 'broker_called', 'configuration_changed'))
+            or any(type(value[key]) is not bool for key in ('vm_token_obtained', 'manifest_digest_verified'))):
+        return False
+    code = value['manifest_http_status']
+    if code is not None and (type(code) is not int or not 100 <= code <= 599):
+        return False
+    try:
+        if datetime.fromisoformat(value['observed_at']).utcoffset().total_seconds() != 0:
+            return False
+    except (TypeError, ValueError, AttributeError):
+        return False
+    if value['status'] == 'observed':
+        return (value['reason'] == 'manifest_verified' and value['vm_token_obtained'] is True
+            and code == 200 and value['manifest_digest_verified'] is True and value['denial_reason'] is None)
+    return (value['reason'] != 'manifest_verified' and value['manifest_digest_verified'] is False
+        and (value['reason'] != 'registry_access_denied' or code in (401, 403) and value['denial_reason'] is not None))

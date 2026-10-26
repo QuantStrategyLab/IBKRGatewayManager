@@ -18,7 +18,7 @@ import tempfile
 from uuid import UUID, uuid4
 
 from scripts.read_native_cash import SCHEDULE_TAGS, TAGS, request_value, result, saved_result
-from scripts.pilot_runtime_preflight import valid_result as valid_preflight_result
+from scripts.pilot_runtime_preflight import valid_result as valid_preflight_result, valid_image_result
 
 RETENTION_REASONS=frozenset({'retention_binding_invalid','retention_directory_invalid',
     'retention_file_invalid','retention_digest_mismatch','retention_source_unavailable',
@@ -151,6 +151,10 @@ def main():
         capture_id, digest = env.get('SAVED_CAPTURE_ID',''), env.get('SAVED_EVIDENCE_SHA256','')
         if env.get('RUNTIME_PREFLIGHT','false') not in ('true','false'):raise ValueError()
         preflight=env.get('RUNTIME_PREFLIGHT','false')=='true'
+        if env.get('RUNTIME_IMAGE_ACCESS','false') not in ('true','false'):raise ValueError()
+        image_access=env.get('RUNTIME_IMAGE_ACCESS','false')=='true'
+        if preflight and image_access:raise ValueError()
+        preflight=preflight or image_access
         if env.get('RETAIN_SAVED_ON_HOST','false') not in ('true','false'):raise ValueError()
         retain_on_host=env.get('RETAIN_SAVED_ON_HOST','false')=='true'
         if preflight and (capture_id or digest or retain_on_host):raise ValueError()
@@ -168,7 +172,9 @@ def main():
         # Code argument is public reviewed source. All binding values go on stdin.
         if preflight:
             collector=Path(__file__).with_name('pilot_runtime_preflight.py').read_text()
-            remote=preflight_program(env['IB_GATEWAY_CONTAINER_NAME'],collector)
+            if image_access:
+                collector+='\nobserve=image_access\n'
+            remote=preflight_program(env.get('PILOT_RUNTIME_BASE_IMAGE','') if image_access else env['IB_GATEWAY_CONTAINER_NAME'],collector)
         else:
             collector=Path(__file__).with_name("read_native_cash.py").read_text()
             remote=remote_program(env["IB_GATEWAY_CONTAINER_NAME"],collector,request,retain_on_host=retain_on_host)
@@ -186,7 +192,8 @@ def main():
             p=subprocess.run(args,input=remote.encode(),capture_output=True,timeout=95)
         value=json.loads(p.stdout)
         # Strict shape prevents raw SDK output or a transport page becoming logs.
-        if p.returncode or not (valid_preflight_result(value) if preflight else valid_safe_result(value)):
+        validator=valid_image_result if image_access else valid_preflight_result if preflight else valid_safe_result
+        if p.returncode or not validator(value):
             raise ValueError()
         out=value
     except subprocess.TimeoutExpired:
