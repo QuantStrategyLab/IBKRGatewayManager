@@ -18,7 +18,7 @@ import tempfile
 from uuid import UUID, uuid4
 
 from scripts.read_native_cash import SCHEDULE_TAGS, TAGS, request_value, result, saved_result
-from scripts.pilot_runtime_preflight import valid_result as valid_preflight_result, valid_image_result
+from scripts.pilot_runtime_preflight import valid_result as valid_preflight_result, valid_image_result, valid_vm_identity_result
 
 RETENTION_REASONS=frozenset({'retention_binding_invalid','retention_directory_invalid',
     'retention_file_invalid','retention_digest_mismatch','retention_source_unavailable',
@@ -153,8 +153,10 @@ def main():
         preflight=env.get('RUNTIME_PREFLIGHT','false')=='true'
         if env.get('RUNTIME_IMAGE_ACCESS','false') not in ('true','false'):raise ValueError()
         image_access=env.get('RUNTIME_IMAGE_ACCESS','false')=='true'
-        if preflight and image_access:raise ValueError()
-        preflight=preflight or image_access
+        if env.get('RUNTIME_IDENTITY_DIAGNOSTIC','false') not in ('true','false'):raise ValueError()
+        identity_diagnostic=env.get('RUNTIME_IDENTITY_DIAGNOSTIC','false')=='true'
+        if sum((preflight,image_access,identity_diagnostic))>1:raise ValueError()
+        preflight=preflight or image_access or identity_diagnostic
         if env.get('RETAIN_SAVED_ON_HOST','false') not in ('true','false'):raise ValueError()
         retain_on_host=env.get('RETAIN_SAVED_ON_HOST','false')=='true'
         if preflight and (capture_id or digest or retain_on_host):raise ValueError()
@@ -174,6 +176,8 @@ def main():
             collector=Path(__file__).with_name('pilot_runtime_preflight.py').read_text()
             if image_access:
                 collector+='\nobserve=image_access\n'
+            if identity_diagnostic:
+                collector+='\nobserve=vm_identity\n'
             remote=preflight_program(env.get('PILOT_RUNTIME_BASE_IMAGE','') if image_access else env['IB_GATEWAY_CONTAINER_NAME'],collector)
         else:
             collector=Path(__file__).with_name("read_native_cash.py").read_text()
@@ -192,7 +196,7 @@ def main():
             p=subprocess.run(args,input=remote.encode(),capture_output=True,timeout=95)
         value=json.loads(p.stdout)
         # Strict shape prevents raw SDK output or a transport page becoming logs.
-        validator=valid_image_result if image_access else valid_preflight_result if preflight else valid_safe_result
+        validator=valid_vm_identity_result if identity_diagnostic else valid_image_result if image_access else valid_preflight_result if preflight else valid_safe_result
         if p.returncode or not validator(value):
             raise ValueError()
         out=value
