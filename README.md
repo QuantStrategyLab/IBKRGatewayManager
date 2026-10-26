@@ -108,6 +108,14 @@ collector preserved as a decimal; they do not establish settlement semantics or
 permit a tag alias. A missing file or mismatched binding fails without fallback
 to a fresh broker request.
 
+`SettledCashByDate`, `SettledCashByDate-C` and `SettledCashByDate-S` are preserved
+as bounded raw strings only in the private observation. A schedule is not a
+scalar decimal: the diagnostic does not drop its text or alias it to
+`SettledCash`. Public output shows only row counts and syntax shapes, collapsing
+all digit/letter runs so that dates and amounts remain private. Parsing the
+schedule, choosing a date/segment and establishing its financial meaning require
+their own verified source contract; this diagnostic grants no spending authority.
+
 ## Repository layout
 
 - `tests/`: unit, contract, and regression tests.
