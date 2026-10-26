@@ -765,7 +765,7 @@ jobs:
           target_alias="gateway-target-${TARGET_INDEX}"
           # The temporary SSH host-key record is bound to this exact IAP target alias.
           proxy_command="gcloud compute start-iap-tunnel '${GCE_INSTANCE_NAME}' 22 --listen-on-stdin --project='${GCP_PROJECT_ID}' --zone='${GCE_ZONE}' --quiet"
-          remote_command="bash -s -- '${IB_GATEWAY_CONTAINER_NAME}' '${IB_GATEWAY_API_PORT}'"
+          remote_command="bash -s -- '${IB_GATEWAY_CONTAINER_NAME}' '${IB_GATEWAY_API_PORT}' source-presence"
           if timeout 75 ssh \
             -i "${SSH_KEY_FILE}" \
             -o IdentitiesOnly=yes \

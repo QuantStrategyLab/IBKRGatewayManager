@@ -222,6 +222,42 @@ class GatewaySshFailureDiagnosticsTests(unittest.TestCase):
         )
         self.assertNotIn("sensitive", result.stdout + result.stderr)
 
+    def test_presence_response_requires_complete_fixed_group(self) -> None:
+        legacy = "\n".join((
+            "GATEWAY_CONNECTION_INSPECTION=observed",
+            "GATEWAY_CONTAINER_RUNNING=true",
+            "GATEWAY_API_LISTENER=false",
+            "GATEWAY_ESTABLISHED_CONNECTION_COUNT=0",
+            "GATEWAY_CONNECTION_OBSERVED_AT_UTC=2026-10-26T00:00:00Z",
+            "GATEWAY_CONNECTION_INSPECTION_LIMIT=OBSERVATION_ONLY_NO_AUTH_OR_CONCURRENCY_ASSERTION",
+        ))
+        fields = [
+            "GATEWAY_PUBLISHED_API_MAPPING=observed",
+            "GATEWAY_PUBLISHED_CONTAINER_API_LISTENER=true",
+            "GATEWAY_HOST_API_LISTENER=true",
+            "GATEWAY_HOST_WEB_DEFAULT_PORT_LISTENER=false",
+            "GATEWAY_CONTAINER_WEB_DEFAULT_PORT_LISTENER=false",
+        ]
+        valid = legacy + "\n" + "\n".join(fields)
+        result = _classify(self.tmp_path, "", 0, valid)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, valid + "\n")
+        for i in range(len(fields)):
+            with self.subTest(missing=i):
+                partial = legacy + "\n" + "\n".join(fields[:i] + fields[i+1:])
+                result = _classify(self.tmp_path, "", 0, partial)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("reason=remote_response_invalid", result.stdout)
+        for invalid in (valid + "\n" + fields[0], valid + "\nPRIVATE=hidden-marker",
+                        valid.replace("MAPPING=observed", "MAPPING=hidden-marker")):
+            result = _classify(self.tmp_path, "", 0, invalid)
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("hidden-marker", result.stdout + result.stderr)
+        for reason in ("port_mapping_invalid", "port_mapping_inspection_failed"):
+            result = _classify(self.tmp_path, "", 1, "GATEWAY_CONNECTION_INSPECTION=blocked reason=" + reason)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("reason=" + reason, result.stdout)
+
     def test_workflow_uses_helpers_and_retains_single_bounded_ssh_path(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("bash scripts/prepare_gateway_ssh_key.sh", workflow)
