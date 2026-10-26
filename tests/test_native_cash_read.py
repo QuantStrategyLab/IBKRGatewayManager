@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import redirect_stdout
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -182,6 +183,14 @@ class NativeCashTests(unittest.TestCase):
         self.assertEqual(json.loads(child.call_args.kwargs['input']),REQUEST)
         self.assertNotIn(ACCOUNT,' '.join(args))
         self.assertEqual(child.call_args.kwargs['timeout'],65)
+
+    def test_compact_transport_rejects_changed_source_before_execution(self):
+        source=(ROOT/'scripts/read_native_cash.py').read_text()
+        remote=remote_program('gateway',source,REQUEST)
+        remote=remote.replace(hashlib.sha256(source.encode()).hexdigest(),'0'*64)
+        with patch('subprocess.run') as child,self.assertRaisesRegex(ValueError,'public_source_digest_mismatch'):
+            exec(compile(remote,'<synthetic-remote>','exec'),{})
+        child.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

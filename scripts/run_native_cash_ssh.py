@@ -27,7 +27,7 @@ def remote_program(container, collector, request):
     return (
         "import subprocess,json,sys,base64,gzip,hashlib\n"
         "code=gzip.decompress(base64.b64decode("+repr(encoded)+"))\n"
-        "assert hashlib.sha256(code).hexdigest()=="+repr(digest)+"\n"
+        "if hashlib.sha256(code).hexdigest()!="+repr(digest)+": raise ValueError('public_source_digest_mismatch')\n"
         "p=subprocess.run(['sudo','-n','docker','exec','-i',"+repr(container)+
         ",'python3','-c',code.decode('utf-8')],input="+repr(json.dumps(request).encode())+
         ",capture_output=True,timeout=65)\n"
