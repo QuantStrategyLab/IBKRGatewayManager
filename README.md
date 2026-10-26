@@ -153,6 +153,13 @@ Only fixed states and resource counts leave Linux. Candidate image labels are
 not source verification, missing container packages do not describe other
 environments, and the result never grants runtime or trading readiness.
 
+`runtime_image_access=true` separately checks the fixed original platform
+manifest using the VM's attached service-account token. Its private immutable
+locator comes from `PILOT_RUNTIME_BASE_IMAGE`; it is not a public workflow input.
+The check is exclusive with the other modes, rejects redirects and proxies,
+and verifies the returned bytes against the admitted digest. It never pulls
+layers, launches a runtime or changes permissions; denial stops the operation.
+
 ## Repository layout
 
 - `tests/`: unit, contract, and regression tests.

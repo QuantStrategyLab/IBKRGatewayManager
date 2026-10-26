@@ -3,6 +3,11 @@ name: Read Native Cash From Existing Gateway
 on:
   workflow_dispatch:
     inputs:
+      runtime_image_access:
+        description: Read the fixed base-image manifest using the existing VM identity; no image pull or runtime launch
+        required: false
+        default: false
+        type: boolean
       runtime_preflight:
         description: Inspect existing host image/package metadata only; no broker connection or pilot launch
         required: false
@@ -35,6 +40,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
+      RUNTIME_IMAGE_ACCESS: ${{ inputs.runtime_image_access }}
+      PILOT_RUNTIME_BASE_IMAGE: ${{ inputs.runtime_image_access && secrets.PILOT_RUNTIME_BASE_IMAGE || '' }}
       RUNTIME_PREFLIGHT: ${{ inputs.runtime_preflight }}
       SAVED_CAPTURE_ID: ${{ inputs.saved_capture_id }}
       SAVED_EVIDENCE_SHA256: ${{ inputs.saved_evidence_sha256 }}
@@ -60,6 +67,7 @@ jobs:
             try {
               const capture = process.env.SAVED_CAPTURE_ID || '';
               const digest = process.env.SAVED_EVIDENCE_SHA256 || '';
+              if (process.env.RUNTIME_IMAGE_ACCESS === 'true' && (process.env.RUNTIME_PREFLIGHT === 'true' || capture || digest || process.env.RETAIN_SAVED_ON_HOST === 'true' || !process.env.PILOT_RUNTIME_BASE_IMAGE)) throw Error();
               if (process.env.RUNTIME_PREFLIGHT === 'true' && (capture || digest || process.env.RETAIN_SAVED_ON_HOST === 'true')) throw Error();
               if ((capture || digest) && (!/^[0-9a-f-]{36}$/.test(capture) || !/^[0-9a-f]{64}$/.test(digest))) throw Error();
               if (process.env.RETAIN_SAVED_ON_HOST === 'true' && (!capture || !digest)) throw Error();
