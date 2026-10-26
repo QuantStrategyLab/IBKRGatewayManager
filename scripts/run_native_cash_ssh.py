@@ -3,6 +3,9 @@
 Private request binding travels only on SSH stdin; raw values never leave Linux.
 The helper never creates keys, edits SSH metadata, installs or restarts software.
 """
+import base64
+import gzip
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +17,23 @@ import tempfile
 from uuid import UUID, uuid4
 
 from scripts.read_native_cash import SCHEDULE_TAGS, TAGS, request_value, result, saved_result
+
+
+def remote_program(container, collector, request):
+    """Keep the SSH stdin envelope small; verify exact public source on Linux."""
+    body=collector.encode()
+    encoded=base64.b64encode(gzip.compress(body,mtime=0)).decode('ascii')
+    digest=hashlib.sha256(body).hexdigest()
+    return (
+        "import subprocess,json,sys,base64,gzip,hashlib\n"
+        "code=gzip.decompress(base64.b64decode("+repr(encoded)+"))\n"
+        "assert hashlib.sha256(code).hexdigest()=="+repr(digest)+"\n"
+        "p=subprocess.run(['sudo','-n','docker','exec','-i',"+repr(container)+
+        ",'python3','-c',code.decode('utf-8')],input="+repr(json.dumps(request).encode())+
+        ",capture_output=True,timeout=65)\n"
+        "try:\n r=json.loads(p.stdout)\nexcept Exception:\n r={'status':'unavailable','reason':'native_response_invalid'}\n"
+        "print(json.dumps(r,sort_keys=True))\n"
+    )
 
 
 def main():
@@ -43,14 +63,8 @@ def main():
             raise ValueError()
         collector=Path(__file__).with_name("read_native_cash.py").read_text()
         # Code argument is public reviewed source. All binding values go on stdin.
-        remote = (
-            "import subprocess,json,sys\n"
-            "p=subprocess.run(['sudo','-n','docker','exec','-i',"+repr(env["IB_GATEWAY_CONTAINER_NAME"])+
-            ",'python3','-c',"+repr(collector)+"],input="+repr(json.dumps(request).encode())+
-            ",capture_output=True,timeout=65)\n"
-            "try:\n r=json.loads(p.stdout)\nexcept Exception:\n r={'status':'unavailable','reason':'native_response_invalid'}\n"
-            "print(json.dumps(r,sort_keys=True))\n"
-        )
+        remote=remote_program(env["IB_GATEWAY_CONTAINER_NAME"],collector,request)
+        print('NATIVE_CASH_CAPTURE_ID='+request['capture_id'],flush=True)
         proxy=shlex.join(['gcloud','compute','start-iap-tunnel',env['GCE_INSTANCE_NAME'],'22',
             '--listen-on-stdin','--project='+env['GCP_PROJECT_ID'],'--zone='+env['GCE_ZONE'],
             '--quiet','--verbosity=error'])

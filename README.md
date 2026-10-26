@@ -116,6 +116,12 @@ all digit/letter runs so that dates and amounts remain private. Parsing the
 schedule, choosing a date/segment and establishing its financial meaning require
 their own verified source contract; this diagnostic grants no spending authority.
 
+The public collector is gzip/base64 packaged for SSH stdin transport and checked
+against its exact source digest on the existing Linux host before execution.
+Account binding still travels on stdin, never command arguments. The capture
+UUID is emitted before transport so an interrupted read can later be inspected
+without issuing another broker request. No timeout is extended.
+
 ## Repository layout
 
 - `tests/`: unit, contract, and regression tests.
