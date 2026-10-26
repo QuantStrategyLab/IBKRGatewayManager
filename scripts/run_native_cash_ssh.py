@@ -18,6 +18,7 @@ import tempfile
 from uuid import UUID, uuid4
 
 from scripts.read_native_cash import SCHEDULE_TAGS, TAGS, request_value, result, saved_result
+from scripts.pilot_runtime_preflight import valid_result as valid_preflight_result
 
 RETENTION_REASONS=frozenset({'retention_binding_invalid','retention_directory_invalid',
     'retention_file_invalid','retention_digest_mismatch','retention_source_unavailable',
@@ -121,6 +122,16 @@ def remote_program(container, collector, request, *, retain_on_host=False):
     )
 
 
+def preflight_program(container, collector):
+    body = collector.encode()
+    encoded = base64.b64encode(gzip.compress(body, mtime=0)).decode('ascii')
+    return ("import json,base64,gzip,hashlib\n"
+        "code=gzip.decompress(base64.b64decode(" + repr(encoded) + "))\n"
+        "if hashlib.sha256(code).hexdigest()!=" + repr(hashlib.sha256(body).hexdigest()) + ": raise ValueError('public_source_digest_mismatch')\n"
+        "ns={'__name__':'qsl_pilot_preflight'}\nexec(compile(code.decode(),'<reviewed-preflight>','exec'),ns)\n"
+        "print(json.dumps(ns['observe'](" + repr(container) + "),sort_keys=True))\n")
+
+
 def main():
     out = dict(status="unavailable", reason="transport_failed")
     retain_on_host=False
@@ -138,22 +149,30 @@ def main():
         if env.get("IB_GATEWAY_MODE") not in ("live","paper"):
             raise ValueError()
         capture_id, digest = env.get('SAVED_CAPTURE_ID',''), env.get('SAVED_EVIDENCE_SHA256','')
+        if env.get('RUNTIME_PREFLIGHT','false') not in ('true','false'):raise ValueError()
+        preflight=env.get('RUNTIME_PREFLIGHT','false')=='true'
         if env.get('RETAIN_SAVED_ON_HOST','false') not in ('true','false'):raise ValueError()
         retain_on_host=env.get('RETAIN_SAVED_ON_HOST','false')=='true'
+        if preflight and (capture_id or digest or retain_on_host):raise ValueError()
         if retain_on_host and (not capture_id or not digest):raise ValueError()
-        request = request_value(dict(account_ids=json.loads(env["EXPECTED_ACCOUNT_SELECTOR_JSON"]),
-            port=4001 if env["IB_GATEWAY_MODE"]=="live" else 4002,capture_id=capture_id or str(uuid4())))
-        if capture_id or digest:
-            if not capture_id or not re.fullmatch(r'[0-9a-f]{64}',digest):raise ValueError()
-            request.pop('port')
-            request['evidence_sha256']=digest
+        if not preflight:
+            request = request_value(dict(account_ids=json.loads(env["EXPECTED_ACCOUNT_SELECTOR_JSON"]),
+                port=4001 if env["IB_GATEWAY_MODE"]=="live" else 4002,capture_id=capture_id or str(uuid4())))
+            if capture_id or digest:
+                if not capture_id or not re.fullmatch(r'[0-9a-f]{64}',digest):raise ValueError()
+                request.pop('port')
+                request['evidence_sha256']=digest
         key=Path(env["SSH_KEY_FILE"])
         if not key.is_file() or key.stat().st_mode & 0o077:
             raise ValueError()
-        collector=Path(__file__).with_name("read_native_cash.py").read_text()
         # Code argument is public reviewed source. All binding values go on stdin.
-        remote=remote_program(env["IB_GATEWAY_CONTAINER_NAME"],collector,request,retain_on_host=retain_on_host)
-        print('NATIVE_CASH_CAPTURE_ID='+request['capture_id'],flush=True)
+        if preflight:
+            collector=Path(__file__).with_name('pilot_runtime_preflight.py').read_text()
+            remote=preflight_program(env['IB_GATEWAY_CONTAINER_NAME'],collector)
+        else:
+            collector=Path(__file__).with_name("read_native_cash.py").read_text()
+            remote=remote_program(env["IB_GATEWAY_CONTAINER_NAME"],collector,request,retain_on_host=retain_on_host)
+            print('NATIVE_CASH_CAPTURE_ID='+request['capture_id'],flush=True)
         proxy=shlex.join(['gcloud','compute','start-iap-tunnel',env['GCE_INSTANCE_NAME'],'22',
             '--listen-on-stdin','--project='+env['GCP_PROJECT_ID'],'--zone='+env['GCE_ZONE'],
             '--quiet','--verbosity=error'])
@@ -167,7 +186,7 @@ def main():
             p=subprocess.run(args,input=remote.encode(),capture_output=True,timeout=95)
         value=json.loads(p.stdout)
         # Strict shape prevents raw SDK output or a transport page becoming logs.
-        if p.returncode or not valid_safe_result(value):
+        if p.returncode or not (valid_preflight_result(value) if preflight else valid_safe_result(value)):
             raise ValueError()
         out=value
     except subprocess.TimeoutExpired:
