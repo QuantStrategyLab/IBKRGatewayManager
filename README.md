@@ -122,6 +122,27 @@ Account binding still travels on stdin, never command arguments. The capture
 UUID is emitted before transport so an interrupted read can later be inspected
 without issuing another broker request. No timeout is extended.
 
+Saved readback also reports single-pair syntax, the shape of its numeric key and
+exact same-capture arithmetic between total, securities and commodities. A zero
+key is not assumed to mean today, and a calendar-shaped key is not assigned a
+broker timezone. Equality with captured ledger cash does not certify settlement
+semantics. Multiple entries, missing raw text and duplicates remain explicit;
+no entry is selected as current cash and no production cash adapter is changed.
+
+With both saved binding inputs, the optional `retain_saved_on_host` flag copies
+the verified original bytes to the existing host user's private
+`~/.qsl-native-cash-evidence/<capture UUID>/observation.json`. The copy uses the
+existing SSH/Docker access, retains the original SHA256, creates mode-0700/0600
+paths and verifies byte readback. An existing identical copy is only read; a
+conflicting file is never overwritten. Docker's archive stays in host memory,
+is not extracted, and only one regular file is accepted. No raw bytes travel
+back through SSH. This survives container replacement while the host disk is
+retained; it is not a verified cloud report or a backup against VM/disk loss.
+The flag defaults off and requires saved-file mode; it never reconnects to the
+broker. A requested retention failure fails the job while preserving the
+separate saved-read result. No permission, storage service or Gateway deployment
+is created.
+
 ## Repository layout
 
 - `tests/`: unit, contract, and regression tests.
