@@ -2,6 +2,15 @@ name: Read Native Cash From Existing Gateway
 
 on:
   workflow_dispatch:
+    inputs:
+      saved_capture_id:
+        description: Optional saved capture UUID (requires its digest; makes no broker connection)
+        required: false
+        type: string
+      saved_evidence_sha256:
+        description: Exact saved observation digest for inventory-only readback
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -15,6 +24,9 @@ jobs:
   read:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      SAVED_CAPTURE_ID: ${{ inputs.saved_capture_id }}
+      SAVED_EVIDENCE_SHA256: ${{ inputs.saved_evidence_sha256 }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -34,6 +46,9 @@ jobs:
             }
             const {parseProtectedGatewayIndex} = require(`${process.env.GITHUB_WORKSPACE}/scripts/parse_protected_gateway_index.cjs`);
             try {
+              const capture = process.env.SAVED_CAPTURE_ID || '';
+              const digest = process.env.SAVED_EVIDENCE_SHA256 || '';
+              if ((capture || digest) && (!/^[0-9a-f-]{36}$/.test(capture) || !/^[0-9a-f]{64}$/.test(digest))) throw Error();
               const index = parseProtectedGatewayIndex(process.env.MATCHED_INDEX);
               const raw = JSON.parse(process.env.TARGETS);
               const targets = Array.isArray(raw) ? raw : Object.entries(raw).map(([name,v]) => ({...v,name}));
@@ -107,7 +122,7 @@ jobs:
           fi
           echo "SSH_KEY_FILE=${key_file}" >>"${GITHUB_ENV}"
 
-      - name: Read one native account update and API order snapshot
+      - name: Read native data or inspect one saved inventory without a broker connection
         run: python3 -m scripts.run_native_cash_ssh
 
       - name: Remove this runner's temporary SSH key

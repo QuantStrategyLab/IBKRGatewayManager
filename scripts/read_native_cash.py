@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import sys
 import tempfile
 from uuid import UUID
@@ -96,6 +97,75 @@ def save_private(directory, payload):
     if path.read_bytes() != body:
         raise ReadError("private_readback_failed")
     return hashlib.sha256(body).hexdigest()
+
+
+def saved_result():
+    return dict(schema_version="ibkr.saved_native_cash_inventory_result.v1",
+        status="unavailable", reason="saved_evidence_invalid", capture_id=None,
+        source_started_at=None, evidence_sha256=None, account_matched=False,
+        saved_readback_verified=False, native_connection_attempted=False,
+        settled_tag_inventory=[], spendable_cash_verified=False,
+        complete_cash_obligations_verified=False, execution_authorized=False,
+        production_configuration_changed=False)
+
+
+def read_saved_inventory(request):
+    """Inspect one digest-bound local observation without constructing a client."""
+    if (not isinstance(request, dict)
+            or set(request) != {"account_ids", "capture_id", "evidence_sha256"}
+            or not isinstance(request["evidence_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", request["evidence_sha256"])):
+        raise ReadError("saved_evidence_invalid")
+    request_value(dict(account_ids=request["account_ids"], port=4001,
+                       capture_id=request["capture_id"]))
+    matches = list(Path(tempfile.gettempdir()).glob("qsl-native-cash-" + request["capture_id"] + "-*"))
+    if len(matches) != 1:
+        raise ReadError("saved_evidence_invalid")
+    directory = matches[0]
+    info = directory.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700
+            or info.st_uid != os.geteuid()):
+        raise ReadError("saved_evidence_invalid")
+    fd = os.open(directory / "observation.json", os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_uid != os.geteuid() or not 0 < info.st_size <= 4_000_000):
+            raise ReadError("saved_evidence_invalid")
+        body = stream.read(4_000_001)
+    if hashlib.sha256(body).hexdigest() != request["evidence_sha256"]:
+        raise ReadError("saved_evidence_invalid")
+    payload = json.loads(body)
+    stage = payload["safe_result"]
+    if (payload["schema_version"] != "ibkr.native_cash_inventory_observation.v1"
+            or payload["synthetic"] is not False
+            or payload["capture_id"] != request["capture_id"]
+            or payload["account_id"] != request["account_ids"][0]
+            or payload["started_at"] != stage["started_at"]
+            or not all(stage[key] is True for key in ("account_matched",
+                "account_download_end_observed", "api_open_orders_end_observed"))):
+        raise ReadError("saved_evidence_invalid")
+    inventory = []
+    for field in payload["fields"]:
+        tag, currency, count = field["tag"], field["currency"], field["count"]
+        if "settled" not in tag.lower():
+            continue
+        if (not re.fullmatch(r"[A-Za-z$][A-Za-z0-9$_.:-]{0,63}", tag)
+                or not re.fullmatch(r"(?:[A-Z]{3}|BASE|)", currency)
+                or type(count) is not int or not 0 < count <= 5000):
+            raise ReadError("saved_evidence_invalid")
+        values = [row["value"] for row in payload["cash_rows"]
+                  if row["tag"] == tag and row["currency"] == currency]
+        if len(values) != count:
+            raise ReadError("saved_evidence_invalid")
+        inventory.append(dict(tag=tag, currency=currency, row_count=count,
+            numeric_rows=sum(value is not None and decimal_text(value) is not None for value in values)))
+    out = saved_result()
+    out.update(status="observed", reason="saved_inventory_readback_verified",
+        capture_id=request["capture_id"], source_started_at=payload["started_at"],
+        evidence_sha256=request["evidence_sha256"], account_matched=True,
+        saved_readback_verified=True, settled_tag_inventory=inventory)
+    return out
 
 
 async def observe(ib, request, out):
@@ -217,7 +287,15 @@ def main():
     logging.disable(logging.CRITICAL)
     out = result()
     try:
-        request = request_value(json.loads(sys.stdin.buffer.read(16384)))
+        raw = json.loads(sys.stdin.buffer.read(16384))
+        if isinstance(raw, dict) and "evidence_sha256" in raw:
+            out = saved_result()
+            if sys.platform != "linux":
+                raise ReadError("saved_evidence_invalid")
+            out = read_saved_inventory(raw)
+            print(json.dumps(out, sort_keys=True))
+            return 0
+        request = request_value(raw)
         out["capture_id"] = request["capture_id"]
         if sys.platform != "linux" or importlib.metadata.version("ib_insync") != "0.9.86":
             raise ReadError("existing_sdk_not_supported")

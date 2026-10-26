@@ -99,6 +99,15 @@ durable cloud report; container replacement may remove it. Missing settlement
 fields, transfer obligations and durable storage remain explicit gaps. An empty
 API order result does not certify all account obligations or spending authority.
 
+To inspect settlement-related field names already saved by a successful run,
+provide both its `saved_capture_id` and `saved_evidence_sha256`. This mode verifies
+the private file's permissions, exact digest, account, capture and completed-read
+markers before returning only tag/currency/count metadata. It does not construct
+an SDK client or reconnect to the broker. Numeric-row counts describe what the
+collector preserved as a decimal; they do not establish settlement semantics or
+permit a tag alias. A missing file or mismatched binding fails without fallback
+to a fresh broker request.
+
 ## Repository layout
 
 - `tests/`: unit, contract, and regression tests.
