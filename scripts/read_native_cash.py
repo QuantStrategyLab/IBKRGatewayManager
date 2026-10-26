@@ -25,6 +25,7 @@ from uuid import UUID
 
 TAGS = ("$LEDGER-CashBalance", "$LEDGER-TotalCashBalance", "CashBalance",
         "TotalCashBalance", "SettledCash", "AvailableFunds", "FullAvailableFunds")
+SCHEDULE_TAGS = ("SettledCashByDate", "SettledCashByDate-C", "SettledCashByDate-S")
 
 
 class ReadError(Exception):
@@ -70,6 +71,31 @@ def field_states(rows):
             state = "OBSERVED"
         states[tag] = state
     return states
+
+
+def value_shape(value):
+    # Collapse every digit/letter run; neither dates nor financial amounts leave
+    # Linux. Punctuation describes syntax only, never settlement semantics.
+    if len(value) > 16384:
+        raise ReadError("native_response_too_large")
+    tokens = re.findall(r"[0-9]+|[A-Za-z]+|\s+|.", value)
+    return "".join("D" if token.isascii() and token.isdigit() else
+        "A" if token.isascii() and token.isalpha() else "W" if token.isspace() else
+        token if token in "{}[]():;,.=+_/-|\"'" else "X" for token in tokens)[:256]
+
+
+def schedule_inventory(rows):
+    groups = sorted({(row["tag"], row["currency"]) for row in rows if row["tag"] in SCHEDULE_TAGS})
+    output = []
+    for tag, currency in groups:
+        values = [row for row in rows if row["tag"] == tag and row["currency"] == currency]
+        raw = [row["raw_value"] for row in values if isinstance(row.get("raw_value"), str)]
+        shapes = sorted({value_shape(value) for value in raw})
+        if len(shapes) > 10:
+            raise ReadError("native_response_too_large")
+        output.append(dict(tag=tag, currency=currency, row_count=len(values),
+                           raw_rows=len(raw), value_shapes=shapes))
+    return output
 
 
 def guard_send(original, expected_account, client_id):
@@ -187,7 +213,14 @@ async def observe(ib, request, out):
             if sum(inventory.values()) > 5000:
                 raise ReadError("native_response_too_large")
             if tag in TAGS or "cash" in tag.lower() or "settled" in tag.lower():
-                rows.append(dict(tag=tag, currency=currency, value=decimal_text(val)))
+                row = dict(tag=tag, currency=currency, value=decimal_text(val))
+                if tag in SCHEDULE_TAGS:
+                    if not isinstance(val, str) or len(val) > 16384:
+                        raise ReadError("native_response_too_large")
+                    row["raw_value"] = val
+                rows.append(row)
+                if sum(len(row.get("raw_value", "")) for row in rows) > 1_000_000:
+                    raise ReadError("native_response_too_large")
             if tag == "AccountReady":
                 out["account_ready"] = {"true":"TRUE", "false":"FALSE"}.get(str(val).lower(), "UNKNOWN")
         original_value(tag, val, currency, account)
@@ -254,6 +287,7 @@ async def observe(ib, request, out):
         out["settled_exact_base_rows"] = inventory[("SettledCash", "BASE")]
         out["other_settled_tag_rows"] = sum(count for (tag, _), count in inventory.items()
                                             if "settled" in tag.lower() and tag != "SettledCash")
+        out["settlement_schedule_inventory"] = schedule_inventory(rows)
         out["native_error_codes"] = sorted(set(errors))
         return dict(schema_version="ibkr.native_cash_inventory_observation.v1", synthetic=False,
             capture_id=request["capture_id"], account_id=expected,
@@ -277,6 +311,7 @@ def result():
         unbound_order_rows=0, usd_field_states=dict.fromkeys(TAGS,"MISSING"),
         native_field_name_count=None, settled_exact_usd_rows=None, settled_exact_base_rows=None,
         other_settled_tag_rows=None, native_error_codes=[],
+        settlement_schedule_inventory=[],
         private_evidence_readback_verified=False, evidence_sha256=None,
         private_evidence_scope="EXISTING_GATEWAY_CONTAINER_ONLY", durable_cloud_store_verified=False,
         complete_cash_obligations_verified=False, spendable_cash_verified=False,

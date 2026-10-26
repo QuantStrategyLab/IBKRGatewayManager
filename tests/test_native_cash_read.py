@@ -12,7 +12,7 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from scripts.read_native_cash import (ReadError, field_states, guard_send, main, observe,
-    read_saved_inventory, request_value, result, save_private, saved_result)
+    read_saved_inventory, request_value, result, save_private, saved_result, value_shape)
 from scripts.run_native_cash_ssh import valid_safe_result
 
 ACCOUNT='U1234567'
@@ -148,6 +148,25 @@ class NativeCashTests(unittest.TestCase):
         self.assertFalse(valid_safe_result({**out,'native_connection_attempted':True}))
         self.assertFalse(valid_safe_result({**out,'settled_tag_inventory':[
             dict(tag='SettledCash',currency='USD',row_count=1,numeric_rows=1,value='90.125')]}))
+
+    def test_schedule_text_is_preserved_privately_without_aliasing_scalar_cash(self):
+        ib=FakeIB();original=ib.reqAccountUpdatesAsync
+        raw='20261026:90.125;20261027:100.25'
+        async def updates(account):
+            ib.wrapper.updateAccountValue('SettledCashByDate',raw,'USD',account)
+            await original(account)
+        ib.reqAccountUpdatesAsync=updates
+        out=result();payload=asyncio.run(observe(ib,REQUEST,out))
+        schedule=next(row for row in payload['cash_rows'] if row['tag']=='SettledCashByDate')
+        self.assertEqual(schedule['raw_value'],raw);self.assertIsNone(schedule['value'])
+        self.assertEqual(out['settlement_schedule_inventory'],[
+            dict(tag='SettledCashByDate',currency='USD',row_count=1,raw_rows=1,value_shapes=['D:D.D;D:D.D'])])
+        self.assertTrue(valid_safe_result(out))
+        self.assertNotIn('90.125',json.dumps(out));self.assertNotIn('20261026',json.dumps(out))
+        self.assertEqual(value_shape('other text\n[20261026,-5.12]'),'AWAW[D,-D.D]')
+        bad={**out,'settlement_schedule_inventory':[
+            dict(tag='SettledCashByDate',currency='USD',row_count=1,raw_rows=1,value_shapes=[raw])]}
+        self.assertFalse(valid_safe_result(bad))
 
 
 if __name__=='__main__':unittest.main()

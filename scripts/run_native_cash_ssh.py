@@ -13,7 +13,7 @@ import sys
 import tempfile
 from uuid import UUID, uuid4
 
-from scripts.read_native_cash import TAGS, request_value, result, saved_result
+from scripts.read_native_cash import SCHEDULE_TAGS, TAGS, request_value, result, saved_result
 
 
 def main():
@@ -117,6 +117,18 @@ def valid_safe_result(value):
                 'private_evidence_readback_verified'))):return False
     if (not isinstance(value['native_error_codes'],list) or len(value['native_error_codes'])>100
             or any(type(code) is not int or not 0<=code<=99999 for code in value['native_error_codes'])):return False
+    inventory=value['settlement_schedule_inventory']
+    if not isinstance(inventory,list) or len(inventory)>5000:return False
+    for field in inventory:
+        if (not isinstance(field,dict) or set(field)!={'tag','currency','row_count','raw_rows','value_shapes'}
+                or field['tag'] not in SCHEDULE_TAGS or not isinstance(field['currency'],str)
+                or not re.fullmatch(r'(?:[A-Z]{3}|BASE|)',field['currency'])
+                or type(field['row_count']) is not int or type(field['raw_rows']) is not int
+                or not 0<=field['raw_rows']<=field['row_count']<=5000
+                or not isinstance(field['value_shapes'],list) or len(field['value_shapes'])>10
+                or any(not isinstance(shape,str) or len(shape)>256
+                    or re.search(r'[^DAWX{}\[\]():;,.=+_/|\-\"\x27]',shape)
+                    for shape in field['value_shapes'])):return False
     return (isinstance(value['usd_field_states'],dict) and set(value['usd_field_states'])==set(TAGS)
             and all(state in ('OBSERVED','MISSING','INVALID','AMBIGUOUS') for state in value['usd_field_states'].values()))
 
