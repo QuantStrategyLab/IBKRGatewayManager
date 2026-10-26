@@ -3,6 +3,11 @@ name: Read Native Cash From Existing Gateway
 on:
   workflow_dispatch:
     inputs:
+      runtime_identity_diagnostic:
+        description: Diagnose only existing VM metadata authentication; no registry request or broker connection
+        required: false
+        default: false
+        type: boolean
       runtime_image_access:
         description: Read the fixed base-image manifest using the existing VM identity; no image pull or runtime launch
         required: false
@@ -40,6 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
+      RUNTIME_IDENTITY_DIAGNOSTIC: ${{ inputs.runtime_identity_diagnostic }}
       RUNTIME_IMAGE_ACCESS: ${{ inputs.runtime_image_access }}
       PILOT_RUNTIME_BASE_IMAGE: ${{ inputs.runtime_image_access && secrets.PILOT_RUNTIME_BASE_IMAGE || '' }}
       RUNTIME_PREFLIGHT: ${{ inputs.runtime_preflight }}
@@ -67,6 +73,7 @@ jobs:
             try {
               const capture = process.env.SAVED_CAPTURE_ID || '';
               const digest = process.env.SAVED_EVIDENCE_SHA256 || '';
+              if (process.env.RUNTIME_IDENTITY_DIAGNOSTIC === 'true' && (process.env.RUNTIME_IMAGE_ACCESS === 'true' || process.env.RUNTIME_PREFLIGHT === 'true' || capture || digest || process.env.RETAIN_SAVED_ON_HOST === 'true')) throw Error();
               if (process.env.RUNTIME_IMAGE_ACCESS === 'true' && (process.env.RUNTIME_PREFLIGHT === 'true' || capture || digest || process.env.RETAIN_SAVED_ON_HOST === 'true' || !process.env.PILOT_RUNTIME_BASE_IMAGE)) throw Error();
               if (process.env.RUNTIME_PREFLIGHT === 'true' && (capture || digest || process.env.RETAIN_SAVED_ON_HOST === 'true')) throw Error();
               if ((capture || digest) && (!/^[0-9a-f-]{36}$/.test(capture) || !/^[0-9a-f]{64}$/.test(digest))) throw Error();
@@ -132,6 +139,15 @@ jobs:
             --target-index "${TARGET_INDEX}")"; then exit 1; fi
           printf '%s\n' "${match_output}"
           if ! grep -qx 'GATEWAY_IP_MATCH_STATUS=match' <<<"${match_output}"; then exit 1; fi
+          if [ "${RUNTIME_IDENTITY_DIAGNOSTIC}" = true ]; then
+            python3 - "${metadata}" <<'PY'
+          import json, sys
+          from scripts.pilot_runtime_preflight import attached_service_account_count
+          with open(sys.argv[1]) as stream:
+              count = attached_service_account_count(json.load(stream))
+          print('VM_ATTACHED_SERVICE_ACCOUNT_COUNT=' + str(count))
+          PY
+          fi
           if ! gcloud secrets versions access latest --project="${GCP_SECRET_PROJECT_ID}" \
             --secret="${SSH_PRIVATE_KEY_SECRET_NAME}" >"${key_file}" 2>"${error_file}"; then
             rm -f "${key_file}"

@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import hashlib
+import socket
 import urllib.error
 import urllib.request
 from types import SimpleNamespace
@@ -16,7 +17,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.pilot_runtime_preflight import (CANDIDATE, PACKAGE_PROBE, observe, valid_result,
-    BASE_DIGEST, image_access, image_result, valid_image_result)
+    BASE_DIGEST, image_access, image_result, valid_image_result,
+    attached_service_account_count, vm_identity, vm_identity_result, valid_vm_identity_result)
 from scripts.run_native_cash_ssh import main as transport_main, preflight_program
 
 
@@ -242,6 +244,105 @@ class ImageAccessTests(unittest.TestCase):
                     patch('scripts.run_native_cash_ssh.subprocess.run') as child, redirect_stdout(io.StringIO()):
                 self.assertEqual(transport_main(), 1)
             child.assert_not_called()
+
+
+class VmIdentityTests(unittest.TestCase):
+    def test_control_plane_summary_contains_count_without_identity(self):
+        self.assertEqual(attached_service_account_count({}), 0)
+        self.assertEqual(attached_service_account_count({'serviceAccounts': []}), 0)
+        self.assertEqual(attached_service_account_count({'serviceAccounts': [{'email': 'private-identity'}]}), 1)
+        for invalid in (None, 'private-identity', [None], [{}, {}]):
+            with self.assertRaises(ValueError):
+                attached_service_account_count({'serviceAccounts': invalid})
+
+    def test_token_success_stops_without_registry_and_excludes_credentials(self):
+        calls = []
+
+        def open_url(request):
+            calls.append(request)
+            return ImageAccessTests.Response(b'{"access_token":"private-synthetic-token"}', {'Metadata-Flavor': 'Google'})
+
+        out = vm_identity(open_url=open_url)
+        self.assertTrue(valid_vm_identity_result(out))
+        self.assertTrue(out['vm_token_obtained'])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].full_url, 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token')
+        self.assertEqual(calls[0].get_header('Metadata-flavor'), 'Google')
+        self.assertNotIn('private-synthetic-token', json.dumps(out))
+        self.assertFalse(out['registry_requested'])
+
+    def test_http_rejection_preserves_status_without_reading_error_body(self):
+        class PrivateBody(io.BytesIO):
+            def read(self, *args):
+                raise AssertionError('error body must not be read')
+
+        def open_url(request):
+            raise urllib.error.HTTPError(request.full_url, 404, 'private-error', {'Metadata-Flavor': 'Google'}, PrivateBody())
+
+        out = vm_identity(open_url=open_url)
+        self.assertEqual(out['reason'], 'metadata_http_rejected')
+        self.assertEqual(out['metadata_http_status'], 404)
+        self.assertTrue(out['metadata_flavor_verified'])
+        self.assertNotIn('private-error', json.dumps(out))
+        self.assertTrue(valid_vm_identity_result(out))
+
+    def test_dns_timeout_and_transport_are_distinct_and_never_retried(self):
+        for error, reason in ((urllib.error.URLError(socket.gaierror('private-host')), 'metadata_dns_failed'),
+                (TimeoutError('private-timeout'), 'metadata_timeout'),
+                (urllib.error.URLError(OSError('private-route')), 'metadata_transport_failed')):
+            calls = []
+
+            def open_url(request):
+                calls.append(request)
+                raise error
+
+            out = vm_identity(open_url=open_url)
+            self.assertEqual(out['reason'], reason)
+            self.assertEqual(len(calls), 1)
+            self.assertNotIn('private-', json.dumps(out))
+            self.assertTrue(valid_vm_identity_result(out))
+
+    def test_response_shape_failures_remain_distinct(self):
+        for body, header, reason in ((b'{}', {}, 'metadata_header_invalid'),
+                (b'x' * 65537, {'Metadata-Flavor': 'Google'}, 'metadata_body_too_large'),
+                (b'private-non-json', {'Metadata-Flavor': 'Google'}, 'metadata_json_invalid'),
+                (b'[]', {'Metadata-Flavor': 'Google'}, 'metadata_token_invalid'),
+                (b'{"access_token":null}', {'Metadata-Flavor': 'Google'}, 'metadata_token_invalid')):
+            out = vm_identity(open_url=lambda _: ImageAccessTests.Response(body, header))
+            self.assertEqual(out['reason'], reason)
+            self.assertFalse(out['vm_token_obtained'])
+            self.assertNotIn('private-non-json', json.dumps(out))
+            self.assertTrue(valid_vm_identity_result(out))
+
+    def test_validator_rejects_data_and_readiness_claims(self):
+        out = vm_identity_result()
+        for changes in ({'token': 'private'}, {'metadata_http_status': True}, {'reason': []},
+                {'registry_requested': True}, {'status': 'observed'}, {'vm_token_obtained': True},
+                {'observed_at': 'not-a-date'}):
+            self.assertFalse(valid_vm_identity_result({**out, **changes}))
+
+    def test_diagnostic_transport_cannot_enter_other_modes(self):
+        out = vm_identity_result()
+        source = (ROOT / 'scripts/pilot_runtime_preflight.py').read_text() + '\nobserve=vm_identity\n'
+        self.assertLess(len(preflight_program('synthetic-gateway', source).encode()), 16384)
+        with tempfile.TemporaryDirectory() as folder:
+            key = Path(folder) / 'key'; key.touch(mode=0o600)
+            env = dict(GCP_PROJECT_ID='synthetic-project', GCE_INSTANCE_NAME='synthetic-vm',
+                GCE_ZONE='us-central1-a', GCE_USER='synthetic', IB_GATEWAY_CONTAINER_NAME='synthetic-gateway',
+                IB_GATEWAY_MODE='live', SSH_KEY_FILE=str(key), RUNTIME_IDENTITY_DIAGNOSTIC='true')
+            output = io.StringIO()
+            with patch.dict(os.environ, env, clear=True), \
+                    patch('scripts.run_native_cash_ssh.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout=json.dumps(out))), \
+                    patch('scripts.run_native_cash_ssh.remote_program') as native, redirect_stdout(output):
+                self.assertEqual(transport_main(), 1)
+            native.assert_not_called()
+            self.assertEqual(json.loads(output.getvalue()), out)
+            for change in ({'RUNTIME_PREFLIGHT': 'true'}, {'RUNTIME_IMAGE_ACCESS': 'true'},
+                    {'SAVED_CAPTURE_ID': 'saved'}, {'RETAIN_SAVED_ON_HOST': 'true'}):
+                with patch.dict(os.environ, {**env, **change}, clear=True), \
+                        patch('scripts.run_native_cash_ssh.subprocess.run') as child, redirect_stdout(io.StringIO()):
+                    self.assertEqual(transport_main(), 1)
+                child.assert_not_called()
 
 
 if __name__ == '__main__':

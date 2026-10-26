@@ -5,6 +5,7 @@ import platform
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import base64
 import hashlib
@@ -168,6 +169,90 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def read_request(request):
     # Tokens never pass through a proxy or an HTTP redirect.
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open(request, timeout=8)
+
+
+def attached_service_account_count(metadata):
+    accounts = metadata.get('serviceAccounts', [])
+    if not isinstance(accounts, list) or len(accounts) > 1 or any(not isinstance(row, dict) for row in accounts):
+        raise ValueError()
+    return len(accounts)
+
+
+IDENTITY_REASONS = {'metadata_request_failed', 'metadata_dns_failed', 'metadata_timeout',
+    'metadata_transport_failed', 'metadata_http_rejected', 'metadata_header_invalid',
+    'metadata_body_too_large', 'metadata_json_invalid', 'metadata_token_invalid', 'metadata_token_available'}
+
+
+def vm_identity_result():
+    return dict(schema_version='ibkr.pilot_vm_identity.v1', status='unavailable', reason='metadata_request_failed',
+        observed_at=datetime.now(timezone.utc).isoformat(), metadata_http_status=None,
+        metadata_flavor_verified=None, vm_token_obtained=False, registry_requested=False,
+        runtime_started=False, broker_called=False, configuration_changed=False)
+
+
+def vm_identity(_=None, *, open_url=read_request):
+    """One instrumented token request; never continue to the registry or expose its body."""
+    out = vm_identity_result()
+    try:
+        request = urllib.request.Request('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
+            headers={'Metadata-Flavor': 'Google'})
+        with open_url(request) as response:
+            out['metadata_http_status'] = response.status
+            out['metadata_flavor_verified'] = response.headers.get('Metadata-Flavor') == 'Google'
+            if response.status != 200:
+                out['reason'] = 'metadata_http_rejected'
+                return out
+            if not out['metadata_flavor_verified']:
+                out['reason'] = 'metadata_header_invalid'
+                return out
+            body = response.read(65537)
+        if len(body) > 65536:
+            out['reason'] = 'metadata_body_too_large'
+            return out
+        try:
+            value = json.loads(body)
+        except (ValueError, UnicodeError):
+            out['reason'] = 'metadata_json_invalid'
+            return out
+        token = value.get('access_token') if isinstance(value, dict) else None
+        if not isinstance(token, str) or not 0 < len(token) <= 8192:
+            out['reason'] = 'metadata_token_invalid'
+            return out
+        out.update(status='observed', reason='metadata_token_available', vm_token_obtained=True)
+    except urllib.error.HTTPError as error:
+        out.update(reason='metadata_http_rejected', metadata_http_status=error.code,
+            metadata_flavor_verified=error.headers.get('Metadata-Flavor') == 'Google')
+    except (TimeoutError, urllib.error.URLError) as error:
+        cause = error.reason if isinstance(error, urllib.error.URLError) else error
+        out['reason'] = ('metadata_dns_failed' if isinstance(cause, socket.gaierror) else
+            'metadata_timeout' if isinstance(cause, TimeoutError) else 'metadata_transport_failed')
+    except Exception:
+        pass
+    return out
+
+
+def valid_vm_identity_result(value):
+    if not isinstance(value, dict) or set(value) != set(vm_identity_result()):
+        return False
+    if (value['schema_version'] != 'ibkr.pilot_vm_identity.v1' or not isinstance(value['reason'], str)
+            or value['reason'] not in IDENTITY_REASONS
+            or value['status'] not in ('observed', 'unavailable')
+            or type(value['vm_token_obtained']) is not bool
+            or value['metadata_flavor_verified'] is not None and type(value['metadata_flavor_verified']) is not bool
+            or any(value[key] is not False for key in ('registry_requested', 'runtime_started', 'broker_called', 'configuration_changed'))):
+        return False
+    code = value['metadata_http_status']
+    if code is not None and (type(code) is not int or not 100 <= code <= 599):
+        return False
+    try:
+        if datetime.fromisoformat(value['observed_at']).utcoffset().total_seconds() != 0:
+            return False
+    except (TypeError, ValueError, AttributeError):
+        return False
+    if value['status'] == 'observed':
+        return (value['reason'] == 'metadata_token_available' and value['vm_token_obtained']
+            and code == 200 and value['metadata_flavor_verified'] is True)
+    return value['reason'] != 'metadata_token_available' and not value['vm_token_obtained']
 
 
 def image_access(image, *, open_url=read_request):

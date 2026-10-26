@@ -160,6 +160,12 @@ The check is exclusive with the other modes, rejects redirects and proxies,
 and verifies the returned bytes against the admitted digest. It never pulls
 layers, launches a runtime or changes permissions; denial stops the operation.
 
+`runtime_identity_diagnostic=true` diagnoses that VM authentication stage alone.
+It reports the attached service-account count from the already-read VM metadata
+and makes one metadata token request with fixed HTTP/transport/response states.
+It never requests the registry, retries the request, changes identity or prints
+tokens, account identities or error bodies. It is exclusive with all other modes.
+
 ## Repository layout
 
 - `tests/`: unit, contract, and regression tests.
