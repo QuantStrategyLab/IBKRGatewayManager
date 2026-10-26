@@ -55,6 +55,15 @@ _HELPER_BLOCKED_REASONS = {
     "container_pid_invalid",
     "socket_inspection_failed",
     "socket_result_invalid",
+    "port_mapping_inspection_failed",
+    "port_mapping_invalid",
+}
+_PRESENCE_PATTERNS = {
+    "GATEWAY_PUBLISHED_API_MAPPING": r"GATEWAY_PUBLISHED_API_MAPPING=(observed|not_published|container_stopped)",
+    "GATEWAY_PUBLISHED_CONTAINER_API_LISTENER": r"GATEWAY_PUBLISHED_CONTAINER_API_LISTENER=(true|false|unknown)",
+    "GATEWAY_HOST_API_LISTENER": r"GATEWAY_HOST_API_LISTENER=(true|false)",
+    "GATEWAY_HOST_WEB_DEFAULT_PORT_LISTENER": r"GATEWAY_HOST_WEB_DEFAULT_PORT_LISTENER=(true|false)",
+    "GATEWAY_CONTAINER_WEB_DEFAULT_PORT_LISTENER": r"GATEWAY_CONTAINER_WEB_DEFAULT_PORT_LISTENER=(true|false|unknown)",
 }
 
 
@@ -67,12 +76,15 @@ def validate_gateway_ssh_response(lines: list[str]) -> str | None:
     ):
         return lines[0]
     names = [line.split("=", 1)[0] for line in lines]
+    patterns = dict(_RESPONSE_PATTERNS)
+    if set(names) & set(_PRESENCE_PATTERNS):
+        patterns.update(_PRESENCE_PATTERNS)
     if (
-        len(lines) != len(_RESPONSE_PATTERNS)
-        or set(names) != set(_RESPONSE_PATTERNS)
+        len(lines) != len(patterns)
+        or set(names) != set(patterns)
         or len(set(names)) != len(names)
         or any(
-            not re.fullmatch(_RESPONSE_PATTERNS.get(name, ""), line)
+            not re.fullmatch(patterns.get(name, ""), line)
             for name, line in zip(names, lines)
         )
     ):

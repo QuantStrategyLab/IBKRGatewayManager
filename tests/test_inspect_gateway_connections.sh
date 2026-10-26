@@ -14,8 +14,21 @@ set -euo pipefail
 shift
 if [[ "${1:-}" == "docker" ]]; then
   [[ "${MOCK_DOCKER_FAIL:-false}" != "true" ]] || exit 11
+  if [[ "${4:-}" == '{{json .NetworkSettings.Ports}}' ]]; then
+    [[ "${MOCK_MAPPING_FAIL:-false}" != "true" ]] || exit 11
+    printf '%s' "${MOCK_PORTS_JSON:-null}"
+    exit 0
+  fi
   printf '%s %s\n' "${MOCK_RUNNING:-true}" "${MOCK_PID:-12345}"
   exit 0
+fi
+if [[ "${1:-}" == "ss" ]]; then
+  [[ "${MOCK_HOST_SS_FAIL:-false}" != "true" ]] || exit 12
+  [[ "${2:-}" == "-H" && "${3:-}" == "-ltn" && "${4:-}" == "sport" && "${5:-}" == "=" ]] || exit 93
+  case "${6:-}" in
+    :4002) printf '%s' "${MOCK_HOST_API_OUTPUT:-}"; exit 0 ;;
+    :5000) printf '%s' "${MOCK_HOST_WEB_OUTPUT:-}"; exit 0 ;;
+  esac
 fi
 if [[ "${1:-}" == "nsenter" ]]; then
   [[ -z "${MOCK_TRACE_FILE:-}" ]] || printf '%s\n' "$*" >> "${MOCK_TRACE_FILE}"
@@ -30,6 +43,12 @@ if [[ "${1:-}" == "nsenter" ]]; then
   if [[ "${1:-}" == "-H" && "${2:-}" == "-ltn" && "${3:-}" == "sport" && "${4:-}" == "=" && "${5:-}" == ":4002" ]]; then
     printf '%s' "${MOCK_LISTENER_OUTPUT:-}"
     exit 0
+  fi
+  if [[ "${1:-}" == "-H" && "${2:-}" == "-ltn" && "${3:-}" == "sport" && "${4:-}" == "=" ]]; then
+    case "${5:-}" in
+      :4004) printf '%s' "${MOCK_MAPPED_OUTPUT:-}"; exit 0 ;;
+      :5000) printf '%s' "${MOCK_CONTAINER_WEB_OUTPUT:-}"; exit 0 ;;
+    esac
   fi
   if [[ "${1:-}" == "-H" && "${2:-}" == "-tn" && "${3:-}" == "state" && "${4:-}" == "established" && "${5:-}" == "sport" && "${6:-}" == "=" && "${7:-}" == ":4002" ]]; then
     printf '%s' "${MOCK_ESTABLISHED_OUTPUT:-}"
@@ -106,5 +125,45 @@ grep -Fq 'ssh-keygen -y -P' "${repo_dir}/scripts/prepare_gateway_ssh_key.sh"
 ! grep -Fq 'docker logs' "${script_file}"
 ! grep -Fq '4001' "${script_file}"
 ! grep -Fq '4002' "${script_file}"
+
+run_presence() {
+  env PATH="${tmp_dir}:${PATH}" "$@" bash "${script_file}" synthetic-container 4002 source-presence
+}
+
+mapping='{"4004/tcp":[{"HostIp":"127.99.88.77","HostPort":"4002"},{"HostIp":"::","HostPort":"4002"}]}'
+output="$(run_presence MOCK_PORTS_JSON="${mapping}" MOCK_HOST_API_OUTPUT='private-host-socket' \
+  MOCK_MAPPED_OUTPUT='private-mapped-socket')"
+grep -Fxq 'GATEWAY_API_LISTENER=false' <<<"${output}"
+grep -Fxq 'GATEWAY_PUBLISHED_API_MAPPING=observed' <<<"${output}"
+grep -Fxq 'GATEWAY_PUBLISHED_CONTAINER_API_LISTENER=true' <<<"${output}"
+grep -Fxq 'GATEWAY_HOST_API_LISTENER=true' <<<"${output}"
+grep -Fxq 'GATEWAY_HOST_WEB_DEFAULT_PORT_LISTENER=false' <<<"${output}"
+grep -Fxq 'GATEWAY_CONTAINER_WEB_DEFAULT_PORT_LISTENER=false' <<<"${output}"
+! grep -Eq '127\.99\.88\.77|private-|4004|5000' <<<"${output}"
+
+output="$(run_presence MOCK_PORTS_JSON="${mapping}" MOCK_HOST_WEB_OUTPUT='private-web-host' \
+  MOCK_CONTAINER_WEB_OUTPUT='private-web-container')"
+grep -Fxq 'GATEWAY_HOST_WEB_DEFAULT_PORT_LISTENER=true' <<<"${output}"
+grep -Fxq 'GATEWAY_CONTAINER_WEB_DEFAULT_PORT_LISTENER=true' <<<"${output}"
+
+output="$(run_presence MOCK_PORTS_JSON=null)"
+grep -Fxq 'GATEWAY_PUBLISHED_API_MAPPING=not_published' <<<"${output}"
+grep -Fxq 'GATEWAY_PUBLISHED_CONTAINER_API_LISTENER=unknown' <<<"${output}"
+
+output="$(run_presence MOCK_RUNNING=false MOCK_PID=0)"
+grep -Fxq 'GATEWAY_PUBLISHED_API_MAPPING=container_stopped' <<<"${output}"
+grep -Fxq 'GATEWAY_CONTAINER_WEB_DEFAULT_PORT_LISTENER=unknown' <<<"${output}"
+
+for bad_mapping in 'private-invalid-json' '[]' '{"4004/tcp":[{"HostPort":"4002"}],"4444/tcp":[{"HostPort":"4002"}]}' '{"4004/tcp":[{}]}'; do
+  if run_presence MOCK_PORTS_JSON="${bad_mapping}" >"${tmp_dir}/failure"; then exit 1; fi
+  grep -Fxq 'GATEWAY_CONNECTION_INSPECTION=blocked reason=port_mapping_invalid' "${tmp_dir}/failure"
+done
+if run_presence MOCK_MAPPING_FAIL=true >"${tmp_dir}/failure"; then exit 1; fi
+grep -Fxq 'GATEWAY_CONNECTION_INSPECTION=blocked reason=port_mapping_inspection_failed' "${tmp_dir}/failure"
+if run_presence MOCK_HOST_SS_FAIL=true >"${tmp_dir}/failure"; then exit 1; fi
+grep -Fxq 'GATEWAY_CONNECTION_INSPECTION=blocked reason=socket_inspection_failed' "${tmp_dir}/failure"
+if env PATH="${tmp_dir}:${PATH}" bash "${script_file}" synthetic-container 4002 'unsafe-mode' >"${tmp_dir}/failure"; then exit 1; fi
+grep -Fxq 'GATEWAY_CONNECTION_INSPECTION=blocked reason=configuration_invalid' "${tmp_dir}/failure"
+grep -Fq "'\${IB_GATEWAY_API_PORT}' source-presence" "${workflow_file}"
 
 echo "PASS: passive Gateway inspection status, failures, counts, and privacy"

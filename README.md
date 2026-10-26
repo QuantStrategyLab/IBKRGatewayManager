@@ -67,6 +67,18 @@ Project and instance names work for IAP administration, and a platform service c
 
 The manual read-only metadata workflow can optionally compare the protected target's SSH key with instance/project SSH-key metadata. Enable `inspect_ssh_key_binding` only together with `match_current_gateway` and `inspect_ssh_policy`; leave `inspect_connections` off. It reports only a fixed match, no-match, or unknown result, never opens SSH, and does not establish guest-side SSH health. OS Login makes metadata-key comparison unknown; a no-match does not prove the Gateway is unreachable.
 
+With `match_current_gateway` and `inspect_connections`, the same bounded IAP SSH
+inspection also reads the container's actual published TCP mapping and checks
+the mapped container port, the host API port, and port 5000 in the host and
+selected container namespaces. This avoids confusing a host port with a
+container port. Output is fixed statuses only, without addresses or process
+details. It sends no API/HTTP request and changes no runtime configuration.
+A listener on port 5000 does not identify Client Portal Gateway or prove a valid
+session; its absence does not rule out another port or container. Native socket
+observations do not establish authentication, cash completeness or spending
+authority. The original two-argument helper and its six-field output remain
+supported; the extended response is accepted only as one complete field group.
+
 ## Repository layout
 
 - `tests/`: unit, contract, and regression tests.
