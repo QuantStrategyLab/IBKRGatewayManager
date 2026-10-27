@@ -69,11 +69,19 @@ _PRESENCE_PATTERNS = {
 
 _READONLY_API_PATTERNS = {
     "GATEWAY_READONLY_API_STATUS": r"GATEWAY_READONLY_API_STATUS=(observed|unavailable)",
-    "GATEWAY_READONLY_API_REASON": r"GATEWAY_READONLY_API_REASON=(probe_failed|client_prerequisite_unavailable|api_session_ready|api_session_incomplete|api_session_timeout|api_connection_refused|api_probe_failed|native_transport_timeout|binding_invalid|probe_source_unavailable|native_execution_failed|native_response_invalid)",
+    "GATEWAY_READONLY_API_REASON": r"GATEWAY_READONLY_API_REASON=(probe_failed|client_prerequisite_unavailable|api_session_ready|api_session_incomplete|api_session_timeout|api_connection_refused|api_probe_failed|native_transport_timeout|binding_invalid|probe_source_unavailable|native_execution_failed|native_response_invalid|contract_details_failed|contract_details_ready|contract_details_timeout|contract_details_disconnected|contract_details_rejected|contract_details_identity_mismatch|contract_details_empty|contract_details_ambiguous)",
     "GATEWAY_READONLY_API_CONNECTION_ATTEMPTS": r"GATEWAY_READONLY_API_CONNECTION_ATTEMPTS=(unknown|[01])",
     "GATEWAY_READONLY_API_SESSION_READY": r"GATEWAY_READONLY_API_SESSION_READY=(true|false)",
     "GATEWAY_READONLY_API_MANAGED_ACCOUNT_COUNT": r"GATEWAY_READONLY_API_MANAGED_ACCOUNT_COUNT=(unknown|[0-9]{1,4})",
     "GATEWAY_READONLY_API_LIMIT": r"GATEWAY_READONLY_API_LIMIT=NO_ACCOUNT_IDENTITY_OR_ORDER_CAPABILITY_ASSERTION",
+}
+_CONTRACT_DETAILS_PATTERNS = {
+    "GATEWAY_CONTRACT_DETAILS_STATUS": r"GATEWAY_CONTRACT_DETAILS_STATUS=(unknown|not_requested|ready|empty|timeout|rejected|disconnected|identity_mismatch|ambiguous|probe_failed)",
+    "GATEWAY_CONTRACT_DETAILS_REQUEST_ATTEMPTS": r"GATEWAY_CONTRACT_DETAILS_REQUEST_ATTEMPTS=(unknown|[01])",
+    "GATEWAY_CONTRACT_DETAILS_RECORD_COUNT": r"GATEWAY_CONTRACT_DETAILS_RECORD_COUNT=(unknown|[0-9]{1,5})",
+    "GATEWAY_CONTRACT_DETAILS_END_OBSERVED": r"GATEWAY_CONTRACT_DETAILS_END_OBSERVED=(unknown|true|false)",
+    "GATEWAY_CONTRACT_DETAILS_IDENTITY_MATCH": r"GATEWAY_CONTRACT_DETAILS_IDENTITY_MATCH=(unknown|true|false)",
+    "GATEWAY_CONTRACT_DETAILS_ERROR_CODES": r"GATEWAY_CONTRACT_DETAILS_ERROR_CODES=(none|unknown|(?:1100|1101|1102|2103|2104|2105|2106|2158|326|504|200|321|354|other)(?:,(?:1100|1101|1102|2103|2104|2105|2106|2158|326|504|200|321|354|other))*)",
 }
 
 
@@ -87,6 +95,10 @@ def validate_gateway_ssh_response(lines: list[str], *, readonly_api: bool = Fals
         return lines[0]
     names = [line.split("=", 1)[0] for line in lines]
     patterns = dict(_READONLY_API_PATTERNS if readonly_api else _RESPONSE_PATTERNS)
+    if readonly_api and set(names) & set(_CONTRACT_DETAILS_PATTERNS):
+        patterns.update(_CONTRACT_DETAILS_PATTERNS)
+    elif any(line.startswith("GATEWAY_READONLY_API_REASON=contract_details_") for line in lines):
+        return None
     if not readonly_api and set(names) & set(_PRESENCE_PATTERNS):
         patterns.update(_PRESENCE_PATTERNS)
     if (
