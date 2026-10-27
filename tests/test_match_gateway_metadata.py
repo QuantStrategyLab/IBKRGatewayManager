@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
@@ -93,6 +94,40 @@ class GatewayMetadataMatchTests(unittest.TestCase):
         )
         for private_fixture_value in ("mock-project-a", "mock-gateway-a", "10.1.2.3", "selfLink", "networkInterfaces"):
             self.assertNotIn(private_fixture_value, completed.stdout + completed.stderr)
+
+    def test_resource_digest_is_only_emitted_after_exact_identity_verification(self):
+        from tempfile import TemporaryDirectory
+
+        resource_path = "/compute/v1/projects/mock-project-a/zones/us-central1-a/instances/mock-gateway-a"
+        with TemporaryDirectory() as temp_dir:
+            metadata_file = Path(temp_dir) / "metadata.json"
+            metadata_file.write_text(json.dumps(_target_metadata()), encoding="utf-8")
+            command = [sys.executable, str(SCRIPT), "--metadata-file", str(metadata_file),
+                       "--target-index", "1", "--verify-target-identity", "--emit-resource-identity-sha256"]
+            environment = {**os.environ, "EXPECTED_GCP_PROJECT_ID": "mock-project-a",
+                           "EXPECTED_GCE_ZONE": "us-central1-a", "EXPECTED_GCE_INSTANCE_NAME": "mock-gateway-a"}
+            matched = subprocess.run(command, env=environment, capture_output=True, text=True)
+            self.assertEqual(matched.returncode, 0)
+            digest = hashlib.sha256(resource_path.encode("utf-8")).hexdigest()
+            self.assertIn(f"GATEWAY_VM_DIAGNOSTIC_RESOURCE_SHA256={digest}", matched.stdout.splitlines())
+            self.assertNotIn("mock-project-a", matched.stdout + matched.stderr)
+            for expected_digest in ("0" * 64, "invalid"):
+                guarded = subprocess.run(command, env={**environment, "EXPECTED_RESOURCE_SHA256": expected_digest},
+                                         capture_output=True, text=True)
+                self.assertEqual(guarded.returncode, 1)
+                self.assertIn("METADATA_RESOURCE_DIGEST_MISMATCH", guarded.stdout)
+                self.assertNotIn("RESOURCE_SHA256=", guarded.stdout)
+            verified = subprocess.run(command, env={**environment, "EXPECTED_RESOURCE_SHA256": digest},
+                                      capture_output=True, text=True)
+            self.assertEqual(verified.returncode, 0)
+            environment["EXPECTED_GCP_PROJECT_ID"] = "mock-project-b"
+            mismatched = subprocess.run(command, env=environment, capture_output=True, text=True)
+            self.assertEqual(mismatched.returncode, 1)
+            self.assertNotIn("RESOURCE_SHA256", mismatched.stdout + mismatched.stderr)
+            unverified = subprocess.run([x for x in command if x != "--verify-target-identity"],
+                                        env=environment, capture_output=True, text=True)
+            self.assertEqual(unverified.returncode, 2)
+            self.assertNotIn(digest, unverified.stdout + unverified.stderr)
 
     def test_identity_cli_mismatch_is_unknown_without_metadata_leak(self):
         from tempfile import TemporaryDirectory

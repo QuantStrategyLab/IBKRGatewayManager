@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -116,7 +117,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--metadata-file", required=True, type=Path)
     parser.add_argument("--target-index", required=True, type=int)
     parser.add_argument("--verify-target-identity", action="store_true")
+    parser.add_argument("--emit-resource-identity-sha256", action="store_true")
     args = parser.parse_args(argv)
+    expected_resource_digest = os.environ.get("EXPECTED_RESOURCE_SHA256", "")
+    if args.emit_resource_identity_sha256 and not args.verify_target_identity:
+        parser.error("resource identity output requires exact target verification")
 
     if args.verify_target_identity:
         status = "UNKNOWN"
@@ -135,8 +140,17 @@ def main(argv: list[str] | None = None) -> int:
                 os.environ.get("EXPECTED_GCE_ZONE"),
                 os.environ.get("EXPECTED_GCE_INSTANCE_NAME"),
             )
+        if status != "UNKNOWN" and expected_resource_digest:
+            resource_path = _compute_resource_path(metadata["selfLink"])
+            actual_digest = hashlib.sha256(resource_path.encode("utf-8")).hexdigest()
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_resource_digest) or actual_digest != expected_resource_digest:
+                status, failure_class = "UNKNOWN", "METADATA_RESOURCE_DIGEST_MISMATCH"
         print(f"GATEWAY_VM_DIAGNOSTIC_STATUS={status}")
         print(f"GATEWAY_VM_DIAGNOSTIC_TARGET_INDEX={args.target_index if 0 <= args.target_index < 4 else 'unknown'}")
+        if status != "UNKNOWN" and args.emit_resource_identity_sha256:
+            resource_path = _compute_resource_path(metadata["selfLink"])
+            digest = hashlib.sha256(resource_path.encode("utf-8")).hexdigest()
+            print(f"GATEWAY_VM_DIAGNOSTIC_RESOURCE_SHA256={digest}")
         if failure_class != "NONE":
             print(f"GATEWAY_VM_DIAGNOSTIC_FAILURE_CLASS={failure_class}")
         return 0 if status != "UNKNOWN" else 1
