@@ -69,8 +69,8 @@ _PRESENCE_PATTERNS = {
 
 _READONLY_API_PATTERNS = {
     "GATEWAY_READONLY_API_STATUS": r"GATEWAY_READONLY_API_STATUS=(observed|unavailable)",
-    "GATEWAY_READONLY_API_REASON": r"GATEWAY_READONLY_API_REASON=(probe_failed|client_prerequisite_unavailable|api_session_ready|api_session_incomplete|api_session_timeout|api_connection_refused|api_probe_failed)",
-    "GATEWAY_READONLY_API_CONNECTION_ATTEMPTS": r"GATEWAY_READONLY_API_CONNECTION_ATTEMPTS=[01]",
+    "GATEWAY_READONLY_API_REASON": r"GATEWAY_READONLY_API_REASON=(probe_failed|client_prerequisite_unavailable|api_session_ready|api_session_incomplete|api_session_timeout|api_connection_refused|api_probe_failed|native_transport_timeout|binding_invalid|probe_source_unavailable|native_execution_failed|native_response_invalid)",
+    "GATEWAY_READONLY_API_CONNECTION_ATTEMPTS": r"GATEWAY_READONLY_API_CONNECTION_ATTEMPTS=(unknown|[01])",
     "GATEWAY_READONLY_API_SESSION_READY": r"GATEWAY_READONLY_API_SESSION_READY=(true|false)",
     "GATEWAY_READONLY_API_MANAGED_ACCOUNT_COUNT": r"GATEWAY_READONLY_API_MANAGED_ACCOUNT_COUNT=(unknown|[0-9]{1,4})",
     "GATEWAY_READONLY_API_LIMIT": r"GATEWAY_READONLY_API_LIMIT=NO_ACCOUNT_IDENTITY_OR_ORDER_CAPABILITY_ASSERTION",
