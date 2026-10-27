@@ -17,6 +17,11 @@ on:
         required: true
         default: false
         type: boolean
+      inspect_contract_details:
+        description: One fixed SOXL security-definition request after the bounded API handshake
+        required: true
+        default: false
+        type: boolean
       inspect_connections:
         description: Passively inspect container and socket state for the protected matched target
         required: true
@@ -69,6 +74,7 @@ jobs:
           MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
           INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
           INSPECT_READONLY_API: ${{ inputs.inspect_readonly_api }}
+          INSPECT_CONTRACT_DETAILS: ${{ inputs.inspect_contract_details }}
           INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           INSPECT_SSH_KEY_BINDING: ${{ inputs.inspect_ssh_key_binding }}
           REMAINING_GATEWAYS: ${{ inputs.remaining_gateways }}
@@ -88,6 +94,10 @@ jobs:
             const inspectSshKeyBinding = process.env.INSPECT_SSH_KEY_BINDING === "true";
             const remainingGateways = process.env.REMAINING_GATEWAYS === "true";
             const remainingGatewayIndex = process.env.REMAINING_GATEWAY_INDEX || "";
+            if (process.env.INSPECT_CONTRACT_DETAILS === "true" && process.env.INSPECT_READONLY_API !== "true") {
+              core.setFailed("Contract details requires the protected readonly API mode");
+              return;
+            }
             if (process.env.INSPECT_READONLY_API === "true" &&
                 (!matchMode || !remainingGateways || !inspectConnections || !/^[0-3]$/.test(remainingGatewayIndex)
                  || process.env.GITHUB_REF !== "refs/heads/main" || process.env.GITHUB_RUN_ATTEMPT !== "1"
@@ -263,6 +273,7 @@ jobs:
           MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
           INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
           INSPECT_READONLY_API: ${{ inputs.inspect_readonly_api }}
+          INSPECT_CONTRACT_DETAILS: ${{ inputs.inspect_contract_details }}
           INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           INSPECT_SSH_KEY_BINDING: ${{ inputs.inspect_ssh_key_binding }}
           REMAINING_GATEWAYS: ${{ inputs.remaining_gateways }}
@@ -284,6 +295,10 @@ jobs:
             const inspectSshKeyBinding = process.env.INSPECT_SSH_KEY_BINDING === "true";
             const remainingGateways = process.env.REMAINING_GATEWAYS === "true";
             const remainingGatewayIndex = process.env.REMAINING_GATEWAY_INDEX || "";
+            if (process.env.INSPECT_CONTRACT_DETAILS === "true" && process.env.INSPECT_READONLY_API !== "true") {
+              core.setFailed("Contract details requires the protected readonly API mode");
+              return;
+            }
             if (process.env.INSPECT_READONLY_API === "true" &&
                 (!matchMode || !remainingGateways || !inspectConnections || !/^[0-3]$/.test(remainingGatewayIndex)
                  || process.env.GITHUB_REF !== "refs/heads/main" || process.env.GITHUB_RUN_ATTEMPT !== "1"
@@ -781,6 +796,7 @@ jobs:
           GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_project_id }}
           TARGET_INDEX: ${{ matrix.target_index }}
           INSPECT_READONLY_API: ${{ inputs.inspect_readonly_api }}
+          INSPECT_CONTRACT_DETAILS: ${{ inputs.inspect_contract_details }}
         run: |
           set -euo pipefail
           known_hosts="$(mktemp "${RUNNER_TEMP}/gateway-known-hosts.XXXXXX" 2>/dev/null)"
@@ -800,6 +816,9 @@ jobs:
           classifier_args=()
           if [ "${INSPECT_READONLY_API}" = "true" ]; then
             remote_command="python3 - '${IB_GATEWAY_CONTAINER_NAME}' '${IB_GATEWAY_API_PORT}'"
+            if [ "${INSPECT_CONTRACT_DETAILS}" = "true" ]; then
+              remote_command+=" --contract-details"
+            fi
             rendered_input="$(mktemp "${RUNNER_TEMP}/gateway-public-probe.XXXXXX")"
             python3 scripts/inspect_gateway_readonly_api.py --render-remote >"${rendered_input}"
             input_file="${rendered_input}"

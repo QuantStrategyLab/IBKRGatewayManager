@@ -79,6 +79,24 @@ observations do not establish authentication, cash completeness or spending
 authority. The original two-argument helper and its six-field output remain
 supported; the extended response is accepted only as one complete field group.
 
+The metadata workflow's `inspect_readonly_api=true` mode makes one bounded
+low-level API handshake on one exact resource-digest-bound protected target.
+It admits only API startup and does not synchronize accounts or orders.
+The separate `inspect_contract_details` flag defaults off and requires that
+mode. When explicitly authorized for the verified SOXL Gateway, it adds exactly
+one SOXL/SMART/USD security-definition request after the handshake. The outgoing
+SDK port admits only startup (71) and that one fixed request (9); submission,
+cancellation and all other requests remain forbidden. Connection and definition
+waits each have a 10-second limit within the existing 25-second native limit;
+there is no retry or reconnect.
+
+Only fixed states, completion/counts, identity-match booleans and allowed error
+codes leave the native process. Incomplete records remain unknown, a rejected
+request is not a successful empty response, and a local definition response does
+not establish the Cloud Run path, account identity, market-data permission or
+trading readiness. All raw SDK output and callback errors stay captured; no
+login, restart, settings or installed dependency changes occur.
+
 The separate manual `Read Native Cash From Existing Gateway` workflow performs
 one active, bounded read on that protected target. Its expected single account
 comes from `IB_GATEWAY_EXPECTED_ACCOUNT_SELECTOR_JSON`, copied from the existing
