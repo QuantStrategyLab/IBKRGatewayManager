@@ -67,7 +67,17 @@ _PRESENCE_PATTERNS = {
 }
 
 
-def validate_gateway_ssh_response(lines: list[str]) -> str | None:
+_READONLY_API_PATTERNS = {
+    "GATEWAY_READONLY_API_STATUS": r"GATEWAY_READONLY_API_STATUS=(observed|unavailable)",
+    "GATEWAY_READONLY_API_REASON": r"GATEWAY_READONLY_API_REASON=(probe_failed|client_prerequisite_unavailable|api_session_ready|api_session_incomplete|api_session_timeout|api_connection_refused|api_probe_failed)",
+    "GATEWAY_READONLY_API_CONNECTION_ATTEMPTS": r"GATEWAY_READONLY_API_CONNECTION_ATTEMPTS=[01]",
+    "GATEWAY_READONLY_API_SESSION_READY": r"GATEWAY_READONLY_API_SESSION_READY=(true|false)",
+    "GATEWAY_READONLY_API_MANAGED_ACCOUNT_COUNT": r"GATEWAY_READONLY_API_MANAGED_ACCOUNT_COUNT=(unknown|[0-9]{1,4})",
+    "GATEWAY_READONLY_API_LIMIT": r"GATEWAY_READONLY_API_LIMIT=NO_ACCOUNT_IDENTITY_OR_ORDER_CAPABILITY_ASSERTION",
+}
+
+
+def validate_gateway_ssh_response(lines: list[str], *, readonly_api: bool = False) -> str | None:
     """Return safe helper output or a fixed local response error."""
 
     if len(lines) == 1 and any(
@@ -76,8 +86,8 @@ def validate_gateway_ssh_response(lines: list[str]) -> str | None:
     ):
         return lines[0]
     names = [line.split("=", 1)[0] for line in lines]
-    patterns = dict(_RESPONSE_PATTERNS)
-    if set(names) & set(_PRESENCE_PATTERNS):
+    patterns = dict(_READONLY_API_PATTERNS if readonly_api else _RESPONSE_PATTERNS)
+    if not readonly_api and set(names) & set(_PRESENCE_PATTERNS):
         patterns.update(_PRESENCE_PATTERNS)
     if (
         len(lines) != len(patterns)
@@ -97,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stdout-file", required=True, type=Path)
     parser.add_argument("--stderr-file", required=True, type=Path)
     parser.add_argument("--exit-code", required=True, type=int)
+    parser.add_argument("--readonly-api", action="store_true")
     args = parser.parse_args(argv)
     if not 0 <= args.exit_code <= 255:
         print("GATEWAY_CONNECTION_INSPECTION=blocked reason=ssh_unknown exit_code=1")
@@ -106,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
             lines = args.stdout_file.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             lines = []
-        response = validate_gateway_ssh_response(lines)
+        response = validate_gateway_ssh_response(lines, readonly_api=args.readonly_api)
         if response is None:
             print("GATEWAY_CONNECTION_INSPECTION=blocked reason=remote_response_invalid")
             return 1
@@ -116,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         lines = args.stdout_file.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         lines = []
-    helper_response = validate_gateway_ssh_response(lines)
+    helper_response = validate_gateway_ssh_response(lines, readonly_api=args.readonly_api)
     if helper_response is not None and helper_response.startswith(
         "GATEWAY_CONNECTION_INSPECTION=blocked reason="
     ):

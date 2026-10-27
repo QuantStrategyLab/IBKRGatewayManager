@@ -54,6 +54,7 @@ const targets = Array.from({ length: 4 }, (_, index) => ({
 function runResolve(envValues) {
   const originalEnv = { ...process.env };
   for (const key of [
+    'INSPECT_READONLY_API', 'EXPECTED_RESOURCE_SHA256', 'GITHUB_REF', 'GITHUB_RUN_ATTEMPT',
     'GITHUB_WORKSPACE', 'MATCH_CURRENT_GATEWAY', 'INSPECT_CONNECTIONS', 'INSPECT_SSH_POLICY', 'MATCH_TARGETS_JSON',
     'INSPECT_SSH_KEY_BINDING', 'REMAINING_GATEWAYS', 'REMAINING_GATEWAY_INDEX', 'MATCHED_INDEX', 'LEGACY_TARGETS_JSON', 'SELECTED_TARGET',
   ]) delete process.env[key];
@@ -77,6 +78,7 @@ function runResolve(envValues) {
 function runMetadataResolve(envValues) {
   const originalEnv = { ...process.env };
   for (const key of [
+    'INSPECT_READONLY_API', 'EXPECTED_RESOURCE_SHA256', 'GITHUB_REF', 'GITHUB_RUN_ATTEMPT',
     'GITHUB_WORKSPACE', 'MATCH_CURRENT_GATEWAY', 'INSPECT_CONNECTIONS', 'INSPECT_SSH_POLICY',
     'INSPECT_SSH_KEY_BINDING', 'REMAINING_GATEWAYS', 'REMAINING_GATEWAY_INDEX', 'MATCH_TARGETS_JSON', 'MATCHED_INDEX',
     'LEGACY_TARGETS_JSON', 'SELECTED_TARGET', 'TARGET_INDEX', 'TARGET_DIGEST',
@@ -386,3 +388,19 @@ const policyBadBinding = runResolve({
 assert.equal(policyBadBinding.failure, 'Passive inspection requires protected current-gateway matching');
 
 console.log('PASS: actual workflow resolve step loads parser and preserves legacy/match/inspect routing');
+
+for (const run of [runResolve, runMetadataResolve]) {
+  const env = {
+    MATCH_CURRENT_GATEWAY: 'true', INSPECT_CONNECTIONS: 'true', INSPECT_READONLY_API: 'true',
+    REMAINING_GATEWAYS: 'true', REMAINING_GATEWAY_INDEX: '1', MATCHED_INDEX: '{"target_index":0}',
+    MATCH_TARGETS_JSON: JSON.stringify(targets), TARGET_INDEX: '1',
+    EXPECTED_RESOURCE_SHA256: 'a'.repeat(64), GITHUB_REF: 'refs/heads/main', GITHUB_RUN_ATTEMPT: '1',
+  };
+  assert.equal(run(env).failure, null);
+  for (const changed of [{ EXPECTED_RESOURCE_SHA256: '' }, { EXPECTED_RESOURCE_SHA256: 'invalid' },
+      { REMAINING_GATEWAY_INDEX: '' }, { INSPECT_CONNECTIONS: 'false' },
+      { GITHUB_REF: 'refs/heads/other' }, { GITHUB_RUN_ATTEMPT: '2' }]) {
+    assert.equal(run({ ...env, ...changed }).failure,
+      'Readonly API probe requires one exact digest-bound protected remaining target');
+  }
+}
