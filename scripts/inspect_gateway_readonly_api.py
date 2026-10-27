@@ -67,21 +67,25 @@ def probe_once(port):
     return result
 
 
-def main(argv=None):
+def main(argv=None, *, probe_source=None):
     args = sys.argv[1:] if argv is None else argv
     reasons = {"probe_failed", "client_prerequisite_unavailable", "api_session_ready",
                "api_session_incomplete", "api_session_timeout", "api_connection_refused", "api_probe_failed"}
-    out = dict(status="unavailable", reason="probe_failed", connection_attempts=0,
+    out = dict(status="unavailable", reason="probe_failed", connection_attempts=None,
                api_session_ready=False, managed_account_count=None,
                account_identity_verified=False, broker_write_attempts=0)
+    phase = "binding"
     try:
         if len(args) != 2 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", args[0]) or args[1] not in {"4001", "4002"}:
             raise ValueError()
-        code = inspect.getsource(probe_once) + "\nimport json\nprint(json.dumps(probe_once(" + args[1] + ")))\n"
+        phase = "source"
+        code = (probe_source if probe_source is not None else inspect.getsource(probe_once)) + "\nimport json\nprint(json.dumps(probe_once(" + args[1] + ")))\n"
+        phase = "native"
         native = subprocess.run(["sudo", "-n", "docker", "exec", "-i", args[0], "python3", "-c", code],
                                 capture_output=True, timeout=25)
         if native.returncode or len(native.stdout) > 4096:
             raise ValueError()
+        phase = "response"
         candidate = json.loads(native.stdout)
         if (not isinstance(candidate, dict) or set(candidate) != set(out)
                 or candidate["status"] not in {"observed", "unavailable"}
@@ -92,16 +96,31 @@ def main(argv=None):
                 or candidate["account_identity_verified"] is not False or candidate["broker_write_attempts"] != 0):
             raise ValueError()
         out = candidate
+    except subprocess.TimeoutExpired:
+        out["reason"] = "native_transport_timeout"
     except Exception:
-        pass
+        if phase in {"binding", "source"}:
+            out["connection_attempts"] = 0
+        out["reason"] = {"binding": "binding_invalid", "source": "probe_source_unavailable",
+                         "native": "native_execution_failed", "response": "native_response_invalid"}[phase]
     print("GATEWAY_READONLY_API_STATUS=" + out["status"])
     print("GATEWAY_READONLY_API_REASON=" + out["reason"])
-    print("GATEWAY_READONLY_API_CONNECTION_ATTEMPTS=" + str(out["connection_attempts"]))
+    print("GATEWAY_READONLY_API_CONNECTION_ATTEMPTS=" + (str(out["connection_attempts"]) if out["connection_attempts"] is not None else "unknown"))
     print("GATEWAY_READONLY_API_SESSION_READY=" + str(out["api_session_ready"]).lower())
     print("GATEWAY_READONLY_API_MANAGED_ACCOUNT_COUNT=" + (str(out["managed_account_count"]) if out["managed_account_count"] is not None else "unknown"))
     print("GATEWAY_READONLY_API_LIMIT=NO_ACCOUNT_IDENTITY_OR_ORDER_CAPABILITY_ASSERTION")
     return 0
 
 
+def render_remote():
+    # Resolve the public function sources while the checkout file is available.
+    # SSH stdin has no inspectable source file on the remote host.
+    return ("import json, re, subprocess, sys\n" + inspect.getsource(main)
+            + "\nraise SystemExit(main(probe_source=" + repr(inspect.getsource(probe_once)) + "))\n")
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    if sys.argv[1:] == ["--render-remote"]:
+        print(render_remote(), end="")
+    else:
+        raise SystemExit(main())

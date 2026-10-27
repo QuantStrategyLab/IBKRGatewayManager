@@ -104,9 +104,66 @@ class ProbeTests(unittest.TestCase):
         lines = stdout.getvalue().splitlines()
         self.assertNotIn('PRIVATE_ACCOUNT', stdout.getvalue())
         self.assertIn('GATEWAY_READONLY_API_STATUS=unavailable', lines)
+        self.assertIn('GATEWAY_READONLY_API_CONNECTION_ATTEMPTS=unknown', lines)
         self.assertIsNotNone(classifier.validate_gateway_ssh_response(lines, readonly_api=True))
         self.assertIsNone(classifier.validate_gateway_ssh_response(lines))
         self.assertIsNone(classifier.validate_gateway_ssh_response(lines + ['PRIVATE_ACCOUNT_U1234567'], readonly_api=True))
+
+    def test_rendered_program_runs_from_real_ssh_style_stdin(self):
+        import json
+        import os
+        import subprocess
+        from tempfile import TemporaryDirectory
+        result = dict(status="observed", reason="api_session_ready", connection_attempts=1,
+                      api_session_ready=True, managed_account_count=1,
+                      account_identity_verified=False, broker_write_attempts=0)
+        with TemporaryDirectory() as directory:
+            sudo = Path(directory)/'sudo'
+            sudo.write_text("#!/bin/sh\nprintf '%s\\n' '" + json.dumps(result) + "'\n")
+            sudo.chmod(0o700)
+            completed = subprocess.run([sys.executable, '-', 'synthetic-container', '4001'],
+                input=probe.render_remote(), text=True, capture_output=True,
+                env={**os.environ, 'PATH': directory+os.pathsep+os.environ['PATH']}, timeout=5)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn('GATEWAY_READONLY_API_STATUS=observed', completed.stdout.splitlines())
+        self.assertIn('GATEWAY_READONLY_API_CONNECTION_ATTEMPTS=1', completed.stdout.splitlines())
+        self.assertNotIn('inspect', completed.stderr)
+        self.assertIsNotNone(classifier.validate_gateway_ssh_response(completed.stdout.splitlines(), readonly_api=True))
+
+    def test_unrendered_stdin_source_failure_occurs_before_native_launch(self):
+        import os
+        import subprocess
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as directory:
+            trace = Path(directory)/'native-launched'
+            sudo = Path(directory)/'sudo'
+            sudo.write_text("#!/bin/sh\ntouch '" + str(trace) + "'\nexit 1\n")
+            sudo.chmod(0o700)
+            completed = subprocess.run([sys.executable, '-', 'synthetic-container', '4001'],
+                input=(ROOT/'scripts/inspect_gateway_readonly_api.py').read_text(),
+                text=True, capture_output=True,
+                env={**os.environ, 'PATH': directory+os.pathsep+os.environ['PATH']}, timeout=5)
+            self.assertFalse(trace.exists())
+        self.assertIn('GATEWAY_READONLY_API_REASON=probe_source_unavailable', completed.stdout.splitlines())
+        self.assertIn('GATEWAY_READONLY_API_CONNECTION_ATTEMPTS=0', completed.stdout.splitlines())
+
+    def test_outer_timeout_preserves_unknown_attempt_count(self):
+        import subprocess
+        stdout = io.StringIO()
+        with patch.object(probe.subprocess, 'run', side_effect=subprocess.TimeoutExpired('synthetic', 25)), redirect_stdout(stdout):
+            probe.main(['synthetic-container', '4001'])
+        self.assertIn('GATEWAY_READONLY_API_CONNECTION_ATTEMPTS=unknown', stdout.getvalue().splitlines())
+        self.assertIn('GATEWAY_READONLY_API_REASON=native_transport_timeout', stdout.getvalue().splitlines())
+
+    def test_source_failure_is_known_before_any_native_launch(self):
+        stdout = io.StringIO()
+        with patch.object(probe.inspect, 'getsource', side_effect=OSError('private fixture')), \
+             patch.object(probe.subprocess, 'run') as run, redirect_stdout(stdout):
+            probe.main(['synthetic-container', '4001'])
+        run.assert_not_called()
+        self.assertIn('GATEWAY_READONLY_API_CONNECTION_ATTEMPTS=0', stdout.getvalue().splitlines())
+        self.assertIn('GATEWAY_READONLY_API_REASON=probe_source_unavailable', stdout.getvalue().splitlines())
+        self.assertNotIn('private fixture', stdout.getvalue())
 
     def test_invalid_binding_does_not_execute(self):
         with patch.object(probe.subprocess, 'run') as run, redirect_stdout(io.StringIO()):

@@ -786,7 +786,8 @@ jobs:
           known_hosts="$(mktemp "${RUNNER_TEMP}/gateway-known-hosts.XXXXXX" 2>/dev/null)"
           output_file="$(mktemp "${RUNNER_TEMP}/gateway-inspection-output.XXXXXX" 2>/dev/null)"
           error_file="$(mktemp "${RUNNER_TEMP}/gateway-ssh-error.XXXXXX" 2>/dev/null)"
-          trap 'rm -f "${known_hosts}" "${output_file}" "${error_file}" "${SSH_KEY_FILE}" 2>/dev/null || true' EXIT
+          rendered_input=""
+          trap 'rm -f "${known_hosts}" "${output_file}" "${error_file}" "${SSH_KEY_FILE}" "${rendered_input}" 2>/dev/null || true' EXIT
           if ! chmod 600 "${known_hosts}" "${output_file}" "${error_file}" 2>/dev/null; then
             echo "GATEWAY_CONNECTION_INSPECTION=blocked reason=inspection_unavailable"
             exit 1
@@ -799,7 +800,9 @@ jobs:
           classifier_args=()
           if [ "${INSPECT_READONLY_API}" = "true" ]; then
             remote_command="python3 - '${IB_GATEWAY_CONTAINER_NAME}' '${IB_GATEWAY_API_PORT}'"
-            input_file=scripts/inspect_gateway_readonly_api.py
+            rendered_input="$(mktemp "${RUNNER_TEMP}/gateway-public-probe.XXXXXX")"
+            python3 scripts/inspect_gateway_readonly_api.py --render-remote >"${rendered_input}"
+            input_file="${rendered_input}"
             classifier_args+=(--readonly-api)
           fi
           if timeout 75 ssh \
