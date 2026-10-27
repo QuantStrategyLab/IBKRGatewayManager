@@ -32,6 +32,10 @@ on:
         required: true
         default: false
         type: boolean
+      expected_resource_sha256:
+        description: Optional exact verified resource identity digest required before passive remaining-target inspection
+        required: false
+        type: string
       remaining_gateway_index:
         description: Optionally inspect one protected remaining target by inventory index 0 through 3
         required: false
@@ -496,6 +500,7 @@ jobs:
           TARGET_INDEX: ${{ matrix.target_index }}
           REMAINING_GATEWAYS: ${{ inputs.remaining_gateways }}
           IB_GATEWAY_EXPECTED_HOST: ${{ inputs.match_current_gateway && !inputs.remaining_gateways && secrets.IB_GATEWAY_EXPECTED_HOST || '' }}
+          EXPECTED_RESOURCE_SHA256: ${{ inputs.expected_resource_sha256 }}
         run: |
           set -euo pipefail
           metadata_file="$(mktemp)"
@@ -527,7 +532,7 @@ jobs:
                 EXPECTED_GCE_INSTANCE_NAME="${GCE_INSTANCE_NAME}" \
                 python3 scripts/match_gateway_metadata.py \
                 --metadata-file "${metadata_file}" --target-index "${TARGET_INDEX}" \
-                --verify-target-identity; then
+                --verify-target-identity --emit-resource-identity-sha256; then
                 if [ "${INSPECT_CONNECTIONS}" = "true" ]; then
                   echo "gateway_connection_target_verified=true" >> "${GITHUB_OUTPUT}"
                 fi
