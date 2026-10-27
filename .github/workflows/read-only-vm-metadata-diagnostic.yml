@@ -12,6 +12,11 @@ on:
         required: true
         default: false
         type: boolean
+      inspect_readonly_api:
+        description: One bounded readonly API session probe on the exact digest-bound remaining target; no account data or submission
+        required: true
+        default: false
+        type: boolean
       inspect_connections:
         description: Passively inspect container and socket state for the protected matched target
         required: true
@@ -63,10 +68,12 @@ jobs:
         env:
           MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
           INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
+          INSPECT_READONLY_API: ${{ inputs.inspect_readonly_api }}
           INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           INSPECT_SSH_KEY_BINDING: ${{ inputs.inspect_ssh_key_binding }}
           REMAINING_GATEWAYS: ${{ inputs.remaining_gateways }}
           REMAINING_GATEWAY_INDEX: ${{ inputs.remaining_gateway_index }}
+          EXPECTED_RESOURCE_SHA256: ${{ inputs.expected_resource_sha256 }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
           MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
           LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
@@ -81,6 +88,13 @@ jobs:
             const inspectSshKeyBinding = process.env.INSPECT_SSH_KEY_BINDING === "true";
             const remainingGateways = process.env.REMAINING_GATEWAYS === "true";
             const remainingGatewayIndex = process.env.REMAINING_GATEWAY_INDEX || "";
+            if (process.env.INSPECT_READONLY_API === "true" &&
+                (!matchMode || !remainingGateways || !inspectConnections || !/^[0-3]$/.test(remainingGatewayIndex)
+                 || process.env.GITHUB_REF !== "refs/heads/main" || process.env.GITHUB_RUN_ATTEMPT !== "1"
+                 || !/^[0-9a-f]{64}$/.test(process.env.EXPECTED_RESOURCE_SHA256 || "") || inspectSshPolicy || inspectSshKeyBinding)) {
+              core.setFailed("Readonly API probe requires one exact digest-bound protected remaining target");
+              return;
+            }
             if (remainingGatewayIndex && (!/^[0-3]$/.test(remainingGatewayIndex)
                 || !matchMode || !remainingGateways || !inspectConnections
                 || inspectSshPolicy || inspectSshKeyBinding)) {
@@ -248,10 +262,12 @@ jobs:
         env:
           MATCH_CURRENT_GATEWAY: ${{ inputs.match_current_gateway }}
           INSPECT_CONNECTIONS: ${{ inputs.inspect_connections }}
+          INSPECT_READONLY_API: ${{ inputs.inspect_readonly_api }}
           INSPECT_SSH_POLICY: ${{ inputs.inspect_ssh_policy }}
           INSPECT_SSH_KEY_BINDING: ${{ inputs.inspect_ssh_key_binding }}
           REMAINING_GATEWAYS: ${{ inputs.remaining_gateways }}
           REMAINING_GATEWAY_INDEX: ${{ inputs.remaining_gateway_index }}
+          EXPECTED_RESOURCE_SHA256: ${{ inputs.expected_resource_sha256 }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
           MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
           LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
@@ -268,6 +284,13 @@ jobs:
             const inspectSshKeyBinding = process.env.INSPECT_SSH_KEY_BINDING === "true";
             const remainingGateways = process.env.REMAINING_GATEWAYS === "true";
             const remainingGatewayIndex = process.env.REMAINING_GATEWAY_INDEX || "";
+            if (process.env.INSPECT_READONLY_API === "true" &&
+                (!matchMode || !remainingGateways || !inspectConnections || !/^[0-3]$/.test(remainingGatewayIndex)
+                 || process.env.GITHUB_REF !== "refs/heads/main" || process.env.GITHUB_RUN_ATTEMPT !== "1"
+                 || !/^[0-9a-f]{64}$/.test(process.env.EXPECTED_RESOURCE_SHA256 || "") || inspectSshPolicy || inspectSshKeyBinding)) {
+              core.setFailed("Readonly API probe requires one exact digest-bound protected remaining target");
+              return;
+            }
             if (remainingGatewayIndex && (!/^[0-3]$/.test(remainingGatewayIndex)
                 || !matchMode || !remainingGateways || !inspectConnections
                 || inspectSshPolicy || inspectSshKeyBinding)) {
@@ -757,6 +780,7 @@ jobs:
         env:
           GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_project_id }}
           TARGET_INDEX: ${{ matrix.target_index }}
+          INSPECT_READONLY_API: ${{ inputs.inspect_readonly_api }}
         run: |
           set -euo pipefail
           known_hosts="$(mktemp "${RUNNER_TEMP}/gateway-known-hosts.XXXXXX" 2>/dev/null)"
@@ -771,6 +795,13 @@ jobs:
           # The temporary SSH host-key record is bound to this exact IAP target alias.
           proxy_command="gcloud compute start-iap-tunnel '${GCE_INSTANCE_NAME}' 22 --listen-on-stdin --project='${GCP_PROJECT_ID}' --zone='${GCE_ZONE}' --quiet"
           remote_command="bash -s -- '${IB_GATEWAY_CONTAINER_NAME}' '${IB_GATEWAY_API_PORT}' source-presence"
+          input_file=scripts/inspect_gateway_connections.sh
+          classifier_args=()
+          if [ "${INSPECT_READONLY_API}" = "true" ]; then
+            remote_command="python3 - '${IB_GATEWAY_CONTAINER_NAME}' '${IB_GATEWAY_API_PORT}'"
+            input_file=scripts/inspect_gateway_readonly_api.py
+            classifier_args+=(--readonly-api)
+          fi
           if timeout 75 ssh \
             -i "${SSH_KEY_FILE}" \
             -o IdentitiesOnly=yes \
@@ -782,7 +813,7 @@ jobs:
             -o "HostKeyAlias=${target_alias}" \
             -o "ProxyCommand=${proxy_command}" \
             "${GCE_USER}@${target_alias}" "${remote_command}" \
-            < scripts/inspect_gateway_connections.sh >"${output_file}" 2>"${error_file}"; then
+            < "${input_file}" >"${output_file}" 2>"${error_file}"; then
             ssh_status=0
           else
             ssh_status=$?
@@ -790,7 +821,7 @@ jobs:
           python3 scripts/classify_gateway_ssh_failure.py \
             --stdout-file "${output_file}" \
             --stderr-file "${error_file}" \
-            --exit-code "${ssh_status}"
+            --exit-code "${ssh_status}" "${classifier_args[@]}"
 
       - name: Remove temporary SSH key
         if: ${{ always() && inputs.inspect_connections }}
