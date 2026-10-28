@@ -40,6 +40,8 @@ bash tests/test_docker_compose_ports.sh
 CI runs the full shell-test list in `.github/workflows/ci.yml` and builds the image
 without starting a runtime. The image build needs Docker and network access.
 
+Organization documentation rules are checked by `python scripts/check_style.py`, which also runs in CI as the `Documentation check` job.
+
 ## Naming and documentation
 
 - Developer documentation is English by default; Chinese siblings use
