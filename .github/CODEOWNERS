@@ -13,3 +13,6 @@
 # Engineering review scope: /Dockerfile
 # Gateway dependency updates require an independently qualified AI review;
 # no automatic dependency-review consumer is claimed by this file.
+
+# Risk-sensitive changes require the repository owner.
+/.github/workflows/ @Pigbibi
