@@ -71,6 +71,8 @@ Organization documentation rules are checked by `python scripts/check_style.py`,
 
 ## Do not
 
+- Only the owner, or a reviewer explicitly authorized by the owner, may apply the `owner-approved` label; coding agents must never apply it to their own PRs.
+
 - Do not disturb an existing production Gateway session for research or
   diagnostic convenience.
 - Do not commit credentials, TOTP seeds or account identifiers; they belong in
