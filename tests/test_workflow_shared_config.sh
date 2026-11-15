@@ -37,6 +37,8 @@ def select(
     mode: str = "keepalive",
     event: str = "schedule",
     selected_target: str = "all",
+    schedule_cron: str = "",
+    schedule_now_utc: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, str], str]:
     with tempfile.TemporaryDirectory() as temp_dir:
         output = Path(temp_dir) / "output"
@@ -46,6 +48,8 @@ def select(
             "SELECTED_TARGET": selected_target,
             "SELECTED_DEPLOY_MODE": mode,
             "GITHUB_EVENT_NAME": event,
+            "EVENT_SCHEDULE_CRON": schedule_cron,
+            "SCHEDULE_NOW_UTC": schedule_now_utc,
             "GITHUB_OUTPUT": str(output),
             "GITHUB_STEP_SUMMARY": str(summary),
         }
@@ -97,6 +101,32 @@ assert "must be a boolean" in invalid.stderr
 restore_all, _, _ = select('{"gateway-a": {}}', "restore-env", event="workflow_dispatch")
 assert restore_all.returncode != 0
 assert "one explicit target" in restore_all.stderr
+
+# Winter EST: 00:15 UTC = 19:15 EST (outside 20:00-20:55 ET pause -> skipped); 01:15 UTC = 20:15 EST (selected)
+win_targets = '{"us-gw": {}, "fut-gw": {"maintenance_window": "weekend_only"}}'
+est_early, outputs, summary = select(win_targets, schedule_cron="15 0 * * 2-6", schedule_now_utc="2026-12-08T00:15:00Z")
+assert est_early.returncode == 0, est_early.stderr
+assert json.loads(outputs["matrix"])["target"] == []
+assert outputs["has_targets"] == "false"
+assert "Skipped us-gw: outside us_23x5_daily_pause window; runtime state untouched." in summary
+
+est_pause, outputs, _ = select(win_targets, schedule_cron="15 1 * * 2-6", schedule_now_utc="2026-12-08T01:15:00Z")
+assert est_pause.returncode == 0, est_pause.stderr
+assert [t["name"] for t in json.loads(outputs["matrix"])["target"]] == ["us-gw"]
+
+# Summer EDT: 00:15 UTC = 20:15 EDT (selected); 01:15 UTC = 21:15 EDT (outside pause -> skipped)
+edt_pause, outputs, _ = select(win_targets, schedule_cron="15 0 * * 2-6", schedule_now_utc="2026-07-08T00:15:00Z")
+assert edt_pause.returncode == 0, edt_pause.stderr
+assert [t["name"] for t in json.loads(outputs["matrix"])["target"]] == ["us-gw"]
+
+edt_late, outputs, _ = select(win_targets, schedule_cron="15 1 * * 2-6", schedule_now_utc="2026-07-08T01:15:00Z")
+assert edt_late.returncode == 0, edt_late.stderr
+assert json.loads(outputs["matrix"])["target"] == []
+
+# Saturday 14:15 UTC = 09:15 EST -> weekend_only selected, us_23x5_daily_pause skipped
+sat_maint, outputs, _ = select(win_targets, schedule_cron="15 14 * * 6", schedule_now_utc="2026-12-12T14:15:00Z")
+assert sat_maint.returncode == 0, sat_maint.stderr
+assert [t["name"] for t in json.loads(outputs["matrix"])["target"]] == ["fut-gw"]
 PY
 grep -Fq 'id-token: write' "$workflow_file"
 grep -Fq 'timeout-minutes: 75' "$workflow_file"
@@ -478,4 +508,61 @@ successful_remote = subprocess.run(
 )
 assert successful_remote.returncode == 0
 assert "GATEWAY_REMOTE_FAILURE_STAGE" not in successful_remote.stderr
+PY
+
+python3 - "$workflow_file" <<'PY'
+import os
+import subprocess
+from pathlib import Path
+import sys
+
+workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
+deploy_step = workflow.split("      - name: Deploy and Log Setup\n", 1)[1].split("          log_step()", 1)[0]
+guard_lines = [line.removeprefix("          ") for line in deploy_step.splitlines() if line.startswith("          ") or line == ""]
+guard_script = "\n".join(guard_lines) + "\necho CONTINUED_PAST_GUARD\n"
+
+def run_guard(**extra_env: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ | {
+        "TARGET_NAME": "us-gw",
+        "MAINTENANCE_WINDOW": "us_23x5_daily_pause",
+        "DEPLOY_EVENT_NAME": "schedule",
+        "EVENT_SCHEDULE_CRON": "15 1 * * 2-6",
+        "SCHEDULE_NOW_UTC": "2026-12-08T01:20:00Z",
+    } | extra_env
+    return subprocess.run(["bash", "-c", guard_script], env=env, capture_output=True, text=True)
+
+expired = run_guard(SCHEDULE_NOW_UTC="2026-12-08T01:56:00Z")
+assert expired.returncode == 0, expired.stderr
+assert "window expired before remote maintenance" in expired.stdout
+assert "CONTINUED_PAST_GUARD" not in expired.stdout
+
+active = run_guard(SCHEDULE_NOW_UTC="2026-12-08T01:20:00Z")
+assert active.returncode == 0, active.stderr
+assert "CONTINUED_PAST_GUARD" in active.stdout
+
+assert "IB_GATEWAY_MAINTENANCE_DEADLINE_EPOCH" in workflow
+assert "recovery_rc -eq 10" in workflow or 'recovery_rc}" -eq 10' in workflow
+
+deadline_probe = deploy_step.split("          log_step()", 1)[0]
+deadline_script = "\n".join(
+    line.removeprefix("          ") for line in deadline_probe.splitlines() if line.startswith("          ") or line == ""
+) + '\necho "DEADLINE=${MAINTENANCE_DEADLINE_EPOCH}"\n'
+deadline_res = subprocess.run(
+    ["bash", "-c", deadline_script],
+    env=os.environ | {
+        "TARGET_NAME": "us-gw",
+        "MAINTENANCE_WINDOW": "us_23x5_daily_pause",
+        "DEPLOY_EVENT_NAME": "schedule",
+        "EVENT_SCHEDULE_CRON": "15 1 * * 2-6",
+        "SCHEDULE_NOW_UTC": "2026-12-08T01:45:00Z",
+    },
+    capture_output=True,
+    text=True,
+)
+assert deadline_res.returncode == 0, deadline_res.stderr
+assert "DEADLINE=1796694900" in deadline_res.stdout  # 2026-12-07 20:55 EST == 2026-12-08T01:55:00Z
+
+invalid = run_guard(MAINTENANCE_WINDOW="bogus")
+assert invalid.returncode != 0
+assert "Unsupported maintenance_window" in invalid.stderr
 PY

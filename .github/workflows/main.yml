@@ -3,9 +3,12 @@ name: Deploy and Keep Active
 on:
   # CI validates every push. Runtime maintenance never installs unreviewed
   # source; binary/container changes require an explicit, selected rollout.
-  # Runs automatically every day at 0:00 UTC (8:00 AM Beijing Time).
+  # Runs inside the US 23x5 daily pause window (20:00-21:00 ET) across EST/EDT,
+  # plus a Saturday window for weekend_only targets.
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '15 0 * * 2-6'
+    - cron: '15 1 * * 2-6'
+    - cron: '15 14 * * 6'
   workflow_dispatch:
     inputs:
       target:
@@ -68,6 +71,7 @@ jobs:
       TARGETS_JSON: ${{ vars.IB_GATEWAY_TARGETS_JSON }}
       SELECTED_TARGET: ${{ github.event.inputs.target }}
       SELECTED_DEPLOY_MODE: ${{ github.event.inputs.deploy_mode }}
+      EVENT_SCHEDULE_CRON: ${{ github.event.schedule }}
     steps:
       - id: targets
         name: Select gateway targets
@@ -75,8 +79,37 @@ jobs:
           set -euo pipefail
 
           python3 - <<'PY'
+          from datetime import datetime, time, timezone
           import json
           import os
+          from zoneinfo import ZoneInfo
+
+          ET = ZoneInfo("America/New_York")
+          VALID_WINDOWS = {"us_23x5_daily_pause", "weekend_only", "always"}
+
+          def window_allows_now(window_name: str, now_et: datetime) -> bool:
+              if window_name == "always":
+                  return True
+              if window_name == "us_23x5_daily_pause":
+                  return now_et.weekday() in {0, 1, 2, 3, 4} and time(20, 0) <= now_et.time() < time(20, 55)
+              if window_name == "weekend_only":
+                  return (
+                      (now_et.weekday() == 4 and now_et.time() >= time(20, 5))
+                      or now_et.weekday() == 5
+                      or (now_et.weekday() == 6 and now_et.time() < time(17, 30))
+                  )
+              raise SystemExit(f"Unsupported maintenance_window: {window_name}")
+
+          def resolve_now_utc() -> datetime:
+              raw = os.environ.get("SCHEDULE_NOW_UTC", "").strip()
+              if not raw:
+                  return datetime.now(timezone.utc)
+              if raw.endswith("Z"):
+                  raw = raw[:-1] + "+00:00"
+              parsed = datetime.fromisoformat(raw)
+              if parsed.tzinfo is None:
+                  return parsed.replace(tzinfo=timezone.utc)
+              return parsed.astimezone(timezone.utc)
 
           raw_targets = os.environ.get("TARGETS_JSON", "").strip()
           if not raw_targets:
@@ -108,6 +141,11 @@ jobs:
                   raise SystemExit(f"Duplicate gateway target: {name}")
               if not isinstance(target.get("maintenance_enabled", True), bool):
                   raise SystemExit(f"Target {name} maintenance_enabled must be a boolean")
+              window_name = target.get("maintenance_window", "us_23x5_daily_pause")
+              if not isinstance(window_name, str) or window_name not in VALID_WINDOWS:
+                  raise SystemExit(
+                      f"Target {name} maintenance_window must be one of {sorted(VALID_WINDOWS)}"
+                  )
               seen.add(name)
               normalized.append(target)
 
@@ -119,10 +157,26 @@ jobs:
                   "use keepalive for all-target maintenance."
               )
           skipped = []
+          window_skipped = []
           if selected_name == "all":
               if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
-                  selected = [target for target in normalized if target.get("maintenance_enabled", True)]
+                  enabled_targets = [target for target in normalized if target.get("maintenance_enabled", True)]
                   skipped = [target for target in normalized if not target.get("maintenance_enabled", True)]
+                  enforce_window = bool(
+                      os.environ.get("EVENT_SCHEDULE_CRON", "").strip()
+                      or os.environ.get("SCHEDULE_NOW_UTC", "").strip()
+                  )
+                  if enforce_window:
+                      now_et = resolve_now_utc().astimezone(ET)
+                      selected = []
+                      for target in enabled_targets:
+                          w_name = target.get("maintenance_window", "us_23x5_daily_pause")
+                          if window_allows_now(w_name, now_et):
+                              selected.append(target)
+                          else:
+                              window_skipped.append((target["name"], w_name, now_et.strftime("%Y-%m-%d %H:%M %Z")))
+                  else:
+                      selected = enabled_targets
               else:
                   selected = normalized
           else:
@@ -144,6 +198,11 @@ jobs:
                   print(f"Skipped scheduled maintenance: {name} (maintenance_enabled=false)")
                   summary.write(
                       f"- Skipped {name}: maintenance_enabled=false; runtime state not verified.\n"
+                  )
+              for name, w_name, et_label in window_skipped:
+                  print(f"Skipped {name}: outside {w_name} window ({et_label}); runtime state untouched.")
+                  summary.write(
+                      f"- Skipped {name}: outside {w_name} window; runtime state untouched.\n"
                   )
           PY
 
@@ -169,6 +228,8 @@ jobs:
     env:
       TARGET_NAME: ${{ matrix.target.name }}
       DEPLOY_EVENT_NAME: ${{ github.event_name }}
+      MAINTENANCE_WINDOW: ${{ matrix.target.maintenance_window }}
+      EVENT_SCHEDULE_CRON: ${{ github.event.schedule }}
       GCP_PROJECT_ID: ${{ matrix.target.gcp_project_id }}
       GCP_SECRET_PROJECT_ID: ${{ matrix.target.gcp_secret_project_id || matrix.target.gcp_project_id }}
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ matrix.target.gcp_workload_identity_provider }}
@@ -716,6 +777,90 @@ jobs:
         run: |
           set -euo pipefail
 
+          MAINTENANCE_DEADLINE_EPOCH=""
+          DEADLINE_FILE="${RUNNER_TEMP:-/tmp}/ibkr_maintenance_deadline_epoch.$$"
+          rm -f "${DEADLINE_FILE}"
+          if [ "${DEPLOY_EVENT_NAME}" = "schedule" ] && { [ -n "${EVENT_SCHEDULE_CRON:-}" ] || [ -n "${SCHEDULE_NOW_UTC:-}" ]; }; then
+            rc=0
+            DEADLINE_FILE="${DEADLINE_FILE}" python3 - <<'PY' || rc=$?
+          from datetime import datetime, time, timedelta, timezone
+          import os
+          from zoneinfo import ZoneInfo
+
+          ET = ZoneInfo("America/New_York")
+          VALID_WINDOWS = {"us_23x5_daily_pause", "weekend_only", "always"}
+
+          def window_allows_now(window_name: str, now_et: datetime) -> bool:
+              if window_name == "always":
+                  return True
+              if window_name == "us_23x5_daily_pause":
+                  return now_et.weekday() in {0, 1, 2, 3, 4} and time(20, 0) <= now_et.time() < time(20, 55)
+              if window_name == "weekend_only":
+                  return (
+                      (now_et.weekday() == 4 and now_et.time() >= time(20, 5))
+                      or now_et.weekday() == 5
+                      or (now_et.weekday() == 6 and now_et.time() < time(17, 30))
+                  )
+              raise SystemExit(f"Unsupported maintenance_window: {window_name}")
+
+          def window_deadline_epoch(window_name: str, now_et: datetime) -> str:
+              if window_name == "always":
+                  return ""
+              if window_name == "us_23x5_daily_pause":
+                  deadline_et = datetime.combine(now_et.date(), time(20, 55), tzinfo=ET)
+                  return str(int(deadline_et.astimezone(timezone.utc).timestamp()))
+              if window_name == "weekend_only":
+                  days_until_sunday = (6 - now_et.weekday()) % 7
+                  deadline_et = datetime.combine(
+                      now_et.date() + timedelta(days=days_until_sunday),
+                      time(17, 30),
+                      tzinfo=ET,
+                  )
+                  return str(int(deadline_et.astimezone(timezone.utc).timestamp()))
+              raise SystemExit(f"Unsupported maintenance_window: {window_name}")
+
+          raw_now = os.environ.get("SCHEDULE_NOW_UTC", "").strip()
+          if raw_now:
+              if raw_now.endswith("Z"):
+                  raw_now = raw_now[:-1] + "+00:00"
+              parsed = datetime.fromisoformat(raw_now)
+              now_utc = parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+          else:
+              now_utc = datetime.now(timezone.utc)
+
+          now_et = now_utc.astimezone(ET)
+          w_name = (os.environ.get("MAINTENANCE_WINDOW") or "").strip() or "us_23x5_daily_pause"
+          if w_name not in VALID_WINDOWS:
+              raise SystemExit(f"Unsupported maintenance_window: {w_name}")
+          if not window_allows_now(w_name, now_et):
+              target_name = os.environ.get("TARGET_NAME", "unknown")
+              et_label = now_et.strftime("%Y-%m-%d %H:%M %Z")
+              print(f"Skipped {target_name}: {w_name} window expired before remote maintenance ({et_label}); runtime state untouched.")
+              summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "").strip()
+              if summary_path:
+                  with open(summary_path, "a", encoding="utf-8") as summary:
+                      summary.write(
+                          f"- Skipped {target_name}: outside {w_name} window before remote maintenance; runtime state untouched.\n"
+                      )
+              raise SystemExit(10)
+          deadline_file = (os.environ.get("DEADLINE_FILE") or "").strip()
+          if deadline_file:
+              with open(deadline_file, "w", encoding="utf-8") as fh:
+                  fh.write(window_deadline_epoch(w_name, now_et))
+          PY
+            if [ "${rc}" -eq 10 ]; then
+              rm -f "${DEADLINE_FILE}"
+              exit 0
+            elif [ "${rc}" -ne 0 ]; then
+              rm -f "${DEADLINE_FILE}"
+              exit "${rc}"
+            fi
+            if [ -f "${DEADLINE_FILE}" ]; then
+              MAINTENANCE_DEADLINE_EPOCH="$(cat "${DEADLINE_FILE}")"
+              rm -f "${DEADLINE_FILE}"
+            fi
+          fi
+
           log_step() {
             echo "[$(date -u +%FT%TZ)] $*"
           }
@@ -875,6 +1020,10 @@ jobs:
           fi
           compose_image="\${compose_project_name}-\${compose_service_name}:latest"
           resolve_ibkr_gateway_unit_names "\${container_name}" "\${IB_GATEWAY_UNIT_SUFFIX:-}"
+          maintenance_deadline_epoch='${MAINTENANCE_DEADLINE_EPOCH:-}'
+          maintenance_deadline_reached() {
+            [ -n "\${maintenance_deadline_epoch}" ] && [ "\$(date +%s)" -ge "\${maintenance_deadline_epoch}" ]
+          }
           watchers_restored=false
           watcher_failsafe_name="\${IBKR_GATEWAY_HEALTHCHECK_SERVICE%.service}-deploy-failsafe"
           watcher_failsafe_seconds="\${IB_GATEWAY_WATCHER_FAILSAFE_SECONDS:-3900}"
@@ -912,16 +1061,26 @@ jobs:
             echo "[\$(date -u +%FT%TZ)] Keepalive fallback: image \${compose_image} is missing, building only \${compose_service_name}"
             sudo docker compose build "\${compose_service_name}"
           fi
-          remote_failure_stage="CHECK_2FA_BIND_MOUNT"
-          host_2fa_bot_sha256="\$(sha256sum ./2fa_bot.py | awk '{print \$1}')"
-          container_2fa_bot_sha256="\$(sudo timeout 15 docker exec "\${container_name}" sha256sum /home/ibgateway/2fa_bot.py 2>/dev/null | awk '{print \$1}' || true)"
-          if [ "\${container_2fa_bot_sha256}" != "\${host_2fa_bot_sha256}" ]; then
-            remote_failure_stage="REFRESH_2FA_BIND_MOUNT"
-            echo "[\$(date -u +%FT%TZ)] Refreshing stale 2FA bot bind mount for \${container_name}"
-            sudo docker compose up -d --force-recreate --no-build "\${compose_service_name}"
+          if maintenance_deadline_reached; then
+            echo "[\$(date -u +%FT%TZ)] Maintenance window deadline reached before bind-mount refresh; skipping disruptive refresh and recovery"
+          else
+            remote_failure_stage="CHECK_2FA_BIND_MOUNT"
+            host_2fa_bot_sha256="\$(sha256sum ./2fa_bot.py | awk '{print \$1}')"
+            container_2fa_bot_sha256="\$(sudo timeout 15 docker exec "\${container_name}" sha256sum /home/ibgateway/2fa_bot.py 2>/dev/null | awk '{print \$1}' || true)"
+            if [ "\${container_2fa_bot_sha256}" != "\${host_2fa_bot_sha256}" ]; then
+              remote_failure_stage="REFRESH_2FA_BIND_MOUNT"
+              echo "[\$(date -u +%FT%TZ)] Refreshing stale 2FA bot bind mount for \${container_name}"
+              sudo docker compose up -d --force-recreate --no-build "\${compose_service_name}"
+            fi
+            remote_failure_stage="RECOVER_GATEWAY"
+            recovery_rc=0
+            sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" IB_GATEWAY_MAINTENANCE_DEADLINE_EPOCH="\${maintenance_deadline_epoch}" bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}' || recovery_rc=\$?
+            if [ "\${recovery_rc}" -eq 10 ]; then
+              echo "[\$(date -u +%FT%TZ)] Maintenance window deadline reached during recovery; skipped disruptive restart/recreation and restoring watchers"
+            elif [ "\${recovery_rc}" -ne 0 ]; then
+              exit "\${recovery_rc}"
+            fi
           fi
-          remote_failure_stage="RECOVER_GATEWAY"
-          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
           remote_failure_stage="RESTORE_WATCHERS"
           restore_gateway_watchers
           remote_failure_stage="REPORT_RUNTIME_STATUS"

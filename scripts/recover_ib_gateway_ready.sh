@@ -19,6 +19,7 @@ transient_dialog_restart_attempts="${IB_GATEWAY_TRANSIENT_DIALOG_RESTART_ATTEMPT
 transient_dialog_restart_wait_seconds="${IB_GATEWAY_TRANSIENT_DIALOG_RESTART_WAIT_SECONDS:-180}"
 lock_file="${IB_GATEWAY_RECOVERY_LOCK_FILE:-/var/lock/ib_gateway_recovery.lock}"
 lock_wait_seconds="${IB_GATEWAY_RECOVERY_LOCK_WAIT_SECONDS:-900}"
+maintenance_deadline_epoch="${IB_GATEWAY_MAINTENANCE_DEADLINE_EPOCH:-}"
 transient_dialog_restart_count=0
 
 fail_recovery() {
@@ -27,6 +28,27 @@ fail_recovery() {
   echo "GATEWAY_RECOVERY_FAILURE_STAGE=${stage}" >&2
   exit "${exit_code}"
 }
+
+current_recovery_epoch() {
+  if [ -n "${IB_GATEWAY_RECOVERY_NOW_EPOCH:-}" ]; then
+    echo "${IB_GATEWAY_RECOVERY_NOW_EPOCH}"
+  else
+    date +%s
+  fi
+}
+
+stop_if_maintenance_deadline_reached() {
+  local action_label="$1"
+  if [ -n "${maintenance_deadline_epoch}" ] && [ "$(current_recovery_epoch)" -ge "${maintenance_deadline_epoch}" ]; then
+    echo "Maintenance window deadline (${maintenance_deadline_epoch}) reached before ${action_label}; skipping disruptive operation." >&2
+    exit 10
+  fi
+  return 0
+}
+
+if [ -n "${maintenance_deadline_epoch}" ] && ! [[ "${maintenance_deadline_epoch}" =~ ^[0-9]+$ ]]; then
+  fail_recovery "RECOVERY_CONFIGURATION_INVALID" 2
+fi
 
 for value_name in transient_dialog_restart_attempts transient_dialog_restart_wait_seconds; do
   value="${!value_name}"
@@ -108,6 +130,7 @@ recover_from_gateway_ui_blocker() {
     stop_for_gateway_ui_blocker
   fi
 
+  stop_if_maintenance_deadline_reached "dialog recovery restart"
   transient_dialog_restart_count=$((transient_dialog_restart_count + 1))
   echo "Compact Gateway dialog observed while the API is unavailable; restarting without acknowledging the dialog (${transient_dialog_restart_count}/${transient_dialog_restart_attempts})." >&2
   docker compose restart "${compose_service_name}"
@@ -134,6 +157,10 @@ wait_for_ready_with_progress() {
   fi
 
   while [ "${extension}" -lt "${progress_extensions}" ]; do
+    if [ -n "${maintenance_deadline_epoch}" ] && [ "$(current_recovery_epoch)" -ge "${maintenance_deadline_epoch}" ]; then
+      return 1
+    fi
+
     if gateway_ui_blocker_present; then
       return 3
     fi
@@ -178,6 +205,7 @@ if [ "${initial_wait_status}" -eq 3 ]; then
   recover_from_gateway_ui_blocker
 fi
 
+stop_if_maintenance_deadline_reached "container restart"
 echo "IB gateway API was not ready; restarting ${container_name} and retrying." >&2
 if ! docker compose restart "${compose_service_name}"; then
   fail_recovery "CONTAINER_RESTART_FAILED"
@@ -196,6 +224,7 @@ if [ "${restart_wait_status}" -eq 3 ]; then
   recover_from_gateway_ui_blocker
 fi
 
+stop_if_maintenance_deadline_reached "container force-recreate"
 echo "IB gateway API is still not ready; recreating ${container_name} and retrying." >&2
 if ! docker compose up -d --force-recreate --no-build "${compose_service_name}"; then
   fail_recovery "CONTAINER_RECREATE_FAILED"
