@@ -509,3 +509,38 @@ successful_remote = subprocess.run(
 assert successful_remote.returncode == 0
 assert "GATEWAY_REMOTE_FAILURE_STAGE" not in successful_remote.stderr
 PY
+
+python3 - "$workflow_file" <<'PY'
+import os
+import subprocess
+from pathlib import Path
+import sys
+
+workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
+deploy_step = workflow.split("      - name: Deploy and Log Setup\n", 1)[1].split("          log_step()", 1)[0]
+guard_lines = [line.removeprefix("          ") for line in deploy_step.splitlines() if line.startswith("          ") or line == ""]
+guard_script = "\n".join(guard_lines) + "\necho CONTINUED_PAST_GUARD\n"
+
+def run_guard(**extra_env: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ | {
+        "TARGET_NAME": "us-gw",
+        "MAINTENANCE_WINDOW": "us_23x5_daily_pause",
+        "DEPLOY_EVENT_NAME": "schedule",
+        "EVENT_SCHEDULE_CRON": "15 1 * * 2-6",
+        "SCHEDULE_NOW_UTC": "2026-12-08T01:20:00Z",
+    } | extra_env
+    return subprocess.run(["bash", "-c", guard_script], env=env, capture_output=True, text=True)
+
+expired = run_guard(SCHEDULE_NOW_UTC="2026-12-08T01:56:00Z")
+assert expired.returncode == 0, expired.stderr
+assert "window expired before remote maintenance" in expired.stdout
+assert "CONTINUED_PAST_GUARD" not in expired.stdout
+
+active = run_guard(SCHEDULE_NOW_UTC="2026-12-08T01:20:00Z")
+assert active.returncode == 0, active.stderr
+assert "CONTINUED_PAST_GUARD" in active.stdout
+
+invalid = run_guard(MAINTENANCE_WINDOW="bogus")
+assert invalid.returncode != 0
+assert "Unsupported maintenance_window" in invalid.stderr
+PY

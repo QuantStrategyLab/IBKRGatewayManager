@@ -228,6 +228,8 @@ jobs:
     env:
       TARGET_NAME: ${{ matrix.target.name }}
       DEPLOY_EVENT_NAME: ${{ github.event_name }}
+      MAINTENANCE_WINDOW: ${{ matrix.target.maintenance_window }}
+      EVENT_SCHEDULE_CRON: ${{ github.event.schedule }}
       GCP_PROJECT_ID: ${{ matrix.target.gcp_project_id }}
       GCP_SECRET_PROJECT_ID: ${{ matrix.target.gcp_secret_project_id || matrix.target.gcp_project_id }}
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ matrix.target.gcp_workload_identity_provider }}
@@ -774,6 +776,61 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.deploy_mode != 'restore-env' }}
         run: |
           set -euo pipefail
+
+          if [ "${DEPLOY_EVENT_NAME}" = "schedule" ] && { [ -n "${EVENT_SCHEDULE_CRON:-}" ] || [ -n "${SCHEDULE_NOW_UTC:-}" ]; }; then
+            rc=0
+            python3 - <<'PY' || rc=$?
+          from datetime import datetime, time, timezone
+          import os
+          from zoneinfo import ZoneInfo
+
+          ET = ZoneInfo("America/New_York")
+          VALID_WINDOWS = {"us_23x5_daily_pause", "weekend_only", "always"}
+
+          def window_allows_now(window_name: str, now_et: datetime) -> bool:
+              if window_name == "always":
+                  return True
+              if window_name == "us_23x5_daily_pause":
+                  return now_et.weekday() in {0, 1, 2, 3, 4} and time(20, 0) <= now_et.time() < time(20, 55)
+              if window_name == "weekend_only":
+                  return (
+                      (now_et.weekday() == 4 and now_et.time() >= time(20, 5))
+                      or now_et.weekday() == 5
+                      or (now_et.weekday() == 6 and now_et.time() < time(17, 30))
+                  )
+              raise SystemExit(f"Unsupported maintenance_window: {window_name}")
+
+          raw_now = os.environ.get("SCHEDULE_NOW_UTC", "").strip()
+          if raw_now:
+              if raw_now.endswith("Z"):
+                  raw_now = raw_now[:-1] + "+00:00"
+              parsed = datetime.fromisoformat(raw_now)
+              now_utc = parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+          else:
+              now_utc = datetime.now(timezone.utc)
+
+          now_et = now_utc.astimezone(ET)
+          w_name = (os.environ.get("MAINTENANCE_WINDOW") or "").strip() or "us_23x5_daily_pause"
+          if w_name not in VALID_WINDOWS:
+              raise SystemExit(f"Unsupported maintenance_window: {w_name}")
+          if not window_allows_now(w_name, now_et):
+              target_name = os.environ.get("TARGET_NAME", "unknown")
+              et_label = now_et.strftime("%Y-%m-%d %H:%M %Z")
+              print(f"Skipped {target_name}: {w_name} window expired before remote maintenance ({et_label}); runtime state untouched.")
+              summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "").strip()
+              if summary_path:
+                  with open(summary_path, "a", encoding="utf-8") as summary:
+                      summary.write(
+                          f"- Skipped {target_name}: outside {w_name} window before remote maintenance; runtime state untouched.\n"
+                      )
+              raise SystemExit(10)
+          PY
+            if [ "${rc}" -eq 10 ]; then
+              exit 0
+            elif [ "${rc}" -ne 0 ]; then
+              exit "${rc}"
+            fi
+          fi
 
           log_step() {
             echo "[$(date -u +%FT%TZ)] $*"
