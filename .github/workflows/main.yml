@@ -3,9 +3,12 @@ name: Deploy and Keep Active
 on:
   # CI validates every push. Runtime maintenance never installs unreviewed
   # source; binary/container changes require an explicit, selected rollout.
-  # Runs automatically every day at 0:00 UTC (8:00 AM Beijing Time).
+  # Runs inside the US 23x5 daily pause window (20:00-21:00 ET) across EST/EDT,
+  # plus a Saturday window for weekend_only targets.
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '15 0 * * 2-6'
+    - cron: '15 1 * * 2-6'
+    - cron: '15 14 * * 6'
   workflow_dispatch:
     inputs:
       target:
@@ -68,6 +71,7 @@ jobs:
       TARGETS_JSON: ${{ vars.IB_GATEWAY_TARGETS_JSON }}
       SELECTED_TARGET: ${{ github.event.inputs.target }}
       SELECTED_DEPLOY_MODE: ${{ github.event.inputs.deploy_mode }}
+      EVENT_SCHEDULE_CRON: ${{ github.event.schedule }}
     steps:
       - id: targets
         name: Select gateway targets
@@ -75,8 +79,37 @@ jobs:
           set -euo pipefail
 
           python3 - <<'PY'
+          from datetime import datetime, time, timezone
           import json
           import os
+          from zoneinfo import ZoneInfo
+
+          ET = ZoneInfo("America/New_York")
+          VALID_WINDOWS = {"us_23x5_daily_pause", "weekend_only", "always"}
+
+          def window_allows_now(window_name: str, now_et: datetime) -> bool:
+              if window_name == "always":
+                  return True
+              if window_name == "us_23x5_daily_pause":
+                  return now_et.weekday() in {0, 1, 2, 3, 4} and time(20, 0) <= now_et.time() < time(20, 55)
+              if window_name == "weekend_only":
+                  return (
+                      (now_et.weekday() == 4 and now_et.time() >= time(20, 5))
+                      or now_et.weekday() == 5
+                      or (now_et.weekday() == 6 and now_et.time() < time(17, 30))
+                  )
+              raise SystemExit(f"Unsupported maintenance_window: {window_name}")
+
+          def resolve_now_utc() -> datetime:
+              raw = os.environ.get("SCHEDULE_NOW_UTC", "").strip()
+              if not raw:
+                  return datetime.now(timezone.utc)
+              if raw.endswith("Z"):
+                  raw = raw[:-1] + "+00:00"
+              parsed = datetime.fromisoformat(raw)
+              if parsed.tzinfo is None:
+                  return parsed.replace(tzinfo=timezone.utc)
+              return parsed.astimezone(timezone.utc)
 
           raw_targets = os.environ.get("TARGETS_JSON", "").strip()
           if not raw_targets:
@@ -108,6 +141,11 @@ jobs:
                   raise SystemExit(f"Duplicate gateway target: {name}")
               if not isinstance(target.get("maintenance_enabled", True), bool):
                   raise SystemExit(f"Target {name} maintenance_enabled must be a boolean")
+              window_name = target.get("maintenance_window", "us_23x5_daily_pause")
+              if not isinstance(window_name, str) or window_name not in VALID_WINDOWS:
+                  raise SystemExit(
+                      f"Target {name} maintenance_window must be one of {sorted(VALID_WINDOWS)}"
+                  )
               seen.add(name)
               normalized.append(target)
 
@@ -119,10 +157,26 @@ jobs:
                   "use keepalive for all-target maintenance."
               )
           skipped = []
+          window_skipped = []
           if selected_name == "all":
               if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
-                  selected = [target for target in normalized if target.get("maintenance_enabled", True)]
+                  enabled_targets = [target for target in normalized if target.get("maintenance_enabled", True)]
                   skipped = [target for target in normalized if not target.get("maintenance_enabled", True)]
+                  enforce_window = bool(
+                      os.environ.get("EVENT_SCHEDULE_CRON", "").strip()
+                      or os.environ.get("SCHEDULE_NOW_UTC", "").strip()
+                  )
+                  if enforce_window:
+                      now_et = resolve_now_utc().astimezone(ET)
+                      selected = []
+                      for target in enabled_targets:
+                          w_name = target.get("maintenance_window", "us_23x5_daily_pause")
+                          if window_allows_now(w_name, now_et):
+                              selected.append(target)
+                          else:
+                              window_skipped.append((target["name"], w_name, now_et.strftime("%Y-%m-%d %H:%M %Z")))
+                  else:
+                      selected = enabled_targets
               else:
                   selected = normalized
           else:
@@ -144,6 +198,11 @@ jobs:
                   print(f"Skipped scheduled maintenance: {name} (maintenance_enabled=false)")
                   summary.write(
                       f"- Skipped {name}: maintenance_enabled=false; runtime state not verified.\n"
+                  )
+              for name, w_name, et_label in window_skipped:
+                  print(f"Skipped {name}: outside {w_name} window ({et_label}); runtime state untouched.")
+                  summary.write(
+                      f"- Skipped {name}: outside {w_name} window; runtime state untouched.\n"
                   )
           PY
 

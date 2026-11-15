@@ -150,6 +150,7 @@ configure_ibc_api_ui_settings() {
 configure_ib_gateway_vmoptions() {
 	local parallel_threads="${IB_GATEWAY_PARALLEL_GC_THREADS:-2}"
 	local conc_threads="${IB_GATEWAY_CONC_GC_THREADS:-1}"
+	local use_serial_gc
 	local vmoptions
 
 	vmoptions="$(find "${TWS_PATH}" -maxdepth 3 -name ibgateway.vmoptions -type f 2>/dev/null | head -n 1 || true)"
@@ -158,16 +159,16 @@ configure_ib_gateway_vmoptions() {
 		return
 	fi
 
-	if grep -Eq '^-XX:ParallelGCThreads=' "$vmoptions"; then
-		sed -i -E "s/^-XX:ParallelGCThreads=.*/-XX:ParallelGCThreads=${parallel_threads}/" "$vmoptions"
+	use_serial_gc="$(printf '%s' "${IB_GATEWAY_USE_SERIAL_GC:-no}" | tr '[:upper:]' '[:lower:]')"
+	local tmp_vmoptions="${vmoptions}.tmp"
+	if [ "$use_serial_gc" = "yes" ] || [ "$use_serial_gc" = "true" ] || [ "$use_serial_gc" = "1" ]; then
+		{ grep -Ev '^-XX:(\+Use[A-Za-z0-9]+GC|ParallelGCThreads=|ConcGCThreads=)' "$vmoptions" || true; } >"$tmp_vmoptions"
+		printf '%s\n' "-XX:+UseSerialGC" "-XX:ParallelGCThreads=${parallel_threads}" "-XX:ConcGCThreads=${conc_threads}" >>"$tmp_vmoptions"
 	else
-		printf '\n-XX:ParallelGCThreads=%s\n' "$parallel_threads" >>"$vmoptions"
+		{ grep -Ev '^-XX:(ParallelGCThreads=|ConcGCThreads=)' "$vmoptions" || true; } >"$tmp_vmoptions"
+		printf '%s\n' "-XX:ParallelGCThreads=${parallel_threads}" "-XX:ConcGCThreads=${conc_threads}" >>"$tmp_vmoptions"
 	fi
-	if grep -Eq '^-XX:ConcGCThreads=' "$vmoptions"; then
-		sed -i -E "s/^-XX:ConcGCThreads=.*/-XX:ConcGCThreads=${conc_threads}/" "$vmoptions"
-	else
-		printf '\n-XX:ConcGCThreads=%s\n' "$conc_threads" >>"$vmoptions"
-	fi
+	mv "$tmp_vmoptions" "$vmoptions"
 	echo ".> Java GC threads set to ParallelGCThreads=${parallel_threads}, ConcGCThreads=${conc_threads}"
 }
 
