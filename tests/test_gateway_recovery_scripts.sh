@@ -191,3 +191,33 @@ fi
 
 grep -Fq 'resolve_ibkr_gateway_unit_suffix()' "$unit_helper_script"
 grep -Fq 'IBKR_2FA_BOT_SERVICE="ibkr-2fa-bot${unit_infix}.service"' "$unit_helper_script"
+
+if invalid_deadline_output="$(IB_GATEWAY_MAINTENANCE_DEADLINE_EPOCH=notanumber bash "$recover_script" live 2>&1)"; then
+  echo "Invalid maintenance deadline unexpectedly succeeded." >&2
+  exit 1
+else
+  invalid_deadline_status=$?
+fi
+test "$invalid_deadline_status" -eq 2
+test "$invalid_deadline_output" = 'GATEWAY_RECOVERY_FAILURE_STAGE=RECOVERY_CONFIGURATION_INVALID'
+
+deadline_docker_log="$tmp_dir/deadline-docker.log"
+: >"$deadline_docker_log"
+deadline_rc=0
+FAKE_DOCKER_LOG="$deadline_docker_log" \
+PATH="$fake_docker_dir:$PATH" \
+IB_GATEWAY_RECOVERY_LOCK_FILE="$tmp_dir/deadline-recovery.lock" \
+IB_GATEWAY_READY_STABILITY_SECONDS=0 \
+IB_GATEWAY_RECOVERY_INITIAL_WAIT_SECONDS=1 \
+IB_GATEWAY_RECOVERY_RESTART_WAIT_SECONDS=1 \
+IB_GATEWAY_RECOVERY_RECREATE_WAIT_SECONDS=1 \
+IB_GATEWAY_TRANSIENT_DIALOG_RESTART_WAIT_SECONDS=1 \
+IB_GATEWAY_MAINTENANCE_DEADLINE_EPOCH=1700000000 \
+IB_GATEWAY_RECOVERY_NOW_EPOCH=1700000001 \
+  bash "$recover_script" live >"$tmp_dir/deadline-recovery.log" 2>&1 || deadline_rc=$?
+test "$deadline_rc" -eq 10
+grep -Fq 'Maintenance window deadline (1700000000) reached before dialog recovery restart' "$tmp_dir/deadline-recovery.log"
+if grep -Fq 'compose restart' "$deadline_docker_log" || grep -Fq -- '--force-recreate' "$deadline_docker_log"; then
+  echo "Expired maintenance deadline must skip disruptive compose restart or force-recreate." >&2
+  exit 1
+fi

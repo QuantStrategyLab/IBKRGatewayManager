@@ -540,6 +540,28 @@ active = run_guard(SCHEDULE_NOW_UTC="2026-12-08T01:20:00Z")
 assert active.returncode == 0, active.stderr
 assert "CONTINUED_PAST_GUARD" in active.stdout
 
+assert "IB_GATEWAY_MAINTENANCE_DEADLINE_EPOCH" in workflow
+assert "recovery_rc -eq 10" in workflow or 'recovery_rc}" -eq 10' in workflow
+
+deadline_probe = deploy_step.split("          log_step()", 1)[0]
+deadline_script = "\n".join(
+    line.removeprefix("          ") for line in deadline_probe.splitlines() if line.startswith("          ") or line == ""
+) + '\necho "DEADLINE=${MAINTENANCE_DEADLINE_EPOCH}"\n'
+deadline_res = subprocess.run(
+    ["bash", "-c", deadline_script],
+    env=os.environ | {
+        "TARGET_NAME": "us-gw",
+        "MAINTENANCE_WINDOW": "us_23x5_daily_pause",
+        "DEPLOY_EVENT_NAME": "schedule",
+        "EVENT_SCHEDULE_CRON": "15 1 * * 2-6",
+        "SCHEDULE_NOW_UTC": "2026-12-08T01:45:00Z",
+    },
+    capture_output=True,
+    text=True,
+)
+assert deadline_res.returncode == 0, deadline_res.stderr
+assert "DEADLINE=1796694900" in deadline_res.stdout  # 2026-12-07 20:55 EST == 2026-12-08T01:55:00Z
+
 invalid = run_guard(MAINTENANCE_WINDOW="bogus")
 assert invalid.returncode != 0
 assert "Unsupported maintenance_window" in invalid.stderr

@@ -777,10 +777,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          MAINTENANCE_DEADLINE_EPOCH=""
+          DEADLINE_FILE="${RUNNER_TEMP:-/tmp}/ibkr_maintenance_deadline_epoch.$$"
+          rm -f "${DEADLINE_FILE}"
           if [ "${DEPLOY_EVENT_NAME}" = "schedule" ] && { [ -n "${EVENT_SCHEDULE_CRON:-}" ] || [ -n "${SCHEDULE_NOW_UTC:-}" ]; }; then
             rc=0
-            python3 - <<'PY' || rc=$?
-          from datetime import datetime, time, timezone
+            DEADLINE_FILE="${DEADLINE_FILE}" python3 - <<'PY' || rc=$?
+          from datetime import datetime, time, timedelta, timezone
           import os
           from zoneinfo import ZoneInfo
 
@@ -798,6 +801,22 @@ jobs:
                       or now_et.weekday() == 5
                       or (now_et.weekday() == 6 and now_et.time() < time(17, 30))
                   )
+              raise SystemExit(f"Unsupported maintenance_window: {window_name}")
+
+          def window_deadline_epoch(window_name: str, now_et: datetime) -> str:
+              if window_name == "always":
+                  return ""
+              if window_name == "us_23x5_daily_pause":
+                  deadline_et = datetime.combine(now_et.date(), time(20, 55), tzinfo=ET)
+                  return str(int(deadline_et.astimezone(timezone.utc).timestamp()))
+              if window_name == "weekend_only":
+                  days_until_sunday = (6 - now_et.weekday()) % 7
+                  deadline_et = datetime.combine(
+                      now_et.date() + timedelta(days=days_until_sunday),
+                      time(17, 30),
+                      tzinfo=ET,
+                  )
+                  return str(int(deadline_et.astimezone(timezone.utc).timestamp()))
               raise SystemExit(f"Unsupported maintenance_window: {window_name}")
 
           raw_now = os.environ.get("SCHEDULE_NOW_UTC", "").strip()
@@ -824,11 +843,21 @@ jobs:
                           f"- Skipped {target_name}: outside {w_name} window before remote maintenance; runtime state untouched.\n"
                       )
               raise SystemExit(10)
+          deadline_file = (os.environ.get("DEADLINE_FILE") or "").strip()
+          if deadline_file:
+              with open(deadline_file, "w", encoding="utf-8") as fh:
+                  fh.write(window_deadline_epoch(w_name, now_et))
           PY
             if [ "${rc}" -eq 10 ]; then
+              rm -f "${DEADLINE_FILE}"
               exit 0
             elif [ "${rc}" -ne 0 ]; then
+              rm -f "${DEADLINE_FILE}"
               exit "${rc}"
+            fi
+            if [ -f "${DEADLINE_FILE}" ]; then
+              MAINTENANCE_DEADLINE_EPOCH="$(cat "${DEADLINE_FILE}")"
+              rm -f "${DEADLINE_FILE}"
             fi
           fi
 
@@ -991,6 +1020,10 @@ jobs:
           fi
           compose_image="\${compose_project_name}-\${compose_service_name}:latest"
           resolve_ibkr_gateway_unit_names "\${container_name}" "\${IB_GATEWAY_UNIT_SUFFIX:-}"
+          maintenance_deadline_epoch='${MAINTENANCE_DEADLINE_EPOCH:-}'
+          maintenance_deadline_reached() {
+            [ -n "\${maintenance_deadline_epoch}" ] && [ "\$(date +%s)" -ge "\${maintenance_deadline_epoch}" ]
+          }
           watchers_restored=false
           watcher_failsafe_name="\${IBKR_GATEWAY_HEALTHCHECK_SERVICE%.service}-deploy-failsafe"
           watcher_failsafe_seconds="\${IB_GATEWAY_WATCHER_FAILSAFE_SECONDS:-3900}"
@@ -1028,16 +1061,26 @@ jobs:
             echo "[\$(date -u +%FT%TZ)] Keepalive fallback: image \${compose_image} is missing, building only \${compose_service_name}"
             sudo docker compose build "\${compose_service_name}"
           fi
-          remote_failure_stage="CHECK_2FA_BIND_MOUNT"
-          host_2fa_bot_sha256="\$(sha256sum ./2fa_bot.py | awk '{print \$1}')"
-          container_2fa_bot_sha256="\$(sudo timeout 15 docker exec "\${container_name}" sha256sum /home/ibgateway/2fa_bot.py 2>/dev/null | awk '{print \$1}' || true)"
-          if [ "\${container_2fa_bot_sha256}" != "\${host_2fa_bot_sha256}" ]; then
-            remote_failure_stage="REFRESH_2FA_BIND_MOUNT"
-            echo "[\$(date -u +%FT%TZ)] Refreshing stale 2FA bot bind mount for \${container_name}"
-            sudo docker compose up -d --force-recreate --no-build "\${compose_service_name}"
+          if maintenance_deadline_reached; then
+            echo "[\$(date -u +%FT%TZ)] Maintenance window deadline reached before bind-mount refresh; skipping disruptive refresh and recovery"
+          else
+            remote_failure_stage="CHECK_2FA_BIND_MOUNT"
+            host_2fa_bot_sha256="\$(sha256sum ./2fa_bot.py | awk '{print \$1}')"
+            container_2fa_bot_sha256="\$(sudo timeout 15 docker exec "\${container_name}" sha256sum /home/ibgateway/2fa_bot.py 2>/dev/null | awk '{print \$1}' || true)"
+            if [ "\${container_2fa_bot_sha256}" != "\${host_2fa_bot_sha256}" ]; then
+              remote_failure_stage="REFRESH_2FA_BIND_MOUNT"
+              echo "[\$(date -u +%FT%TZ)] Refreshing stale 2FA bot bind mount for \${container_name}"
+              sudo docker compose up -d --force-recreate --no-build "\${compose_service_name}"
+            fi
+            remote_failure_stage="RECOVER_GATEWAY"
+            recovery_rc=0
+            sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" IB_GATEWAY_MAINTENANCE_DEADLINE_EPOCH="\${maintenance_deadline_epoch}" bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}' || recovery_rc=\$?
+            if [ "\${recovery_rc}" -eq 10 ]; then
+              echo "[\$(date -u +%FT%TZ)] Maintenance window deadline reached during recovery; skipped disruptive restart/recreation and restoring watchers"
+            elif [ "\${recovery_rc}" -ne 0 ]; then
+              exit "\${recovery_rc}"
+            fi
           fi
-          remote_failure_stage="RECOVER_GATEWAY"
-          sudo env IB_GATEWAY_CONTAINER_NAME="\${container_name}" IB_GATEWAY_COMPOSE_SERVICE_NAME="\${compose_service_name}" bash ./scripts/recover_ib_gateway_ready.sh '${IB_GATEWAY_MODE}'
           remote_failure_stage="RESTORE_WATCHERS"
           restore_gateway_watchers
           remote_failure_stage="REPORT_RUNTIME_STATUS"
