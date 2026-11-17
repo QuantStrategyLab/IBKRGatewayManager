@@ -38,7 +38,7 @@ bash tests/test_docker_compose_ports.sh
 CI runs the full shell-test list in `.github/workflows/ci.yml` and builds the image
 without starting a runtime. The image build needs Docker and network access.
 
-Organization documentation rules are checked by `python scripts/check_style.py --phase 2` (`Documentation check` in CI).
+Organization documentation rules run in CI via `QuantStrategyLab/.github/.github/workflows/docs-acceptance.yml` (`Documentation check`), or offline from a sibling `.github` checkout with `python3 ../.github/scripts/check_style.py --root . --phase 2`.
 
 ## Naming and documentation
 
