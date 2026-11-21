@@ -51,6 +51,9 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 concurrency:
   group: read-only-gateway-vm-metadata-${{ inputs.match_current_gateway && 'match-current' || inputs.target }}
   cancel-in-progress: false
@@ -64,7 +67,7 @@ jobs:
       matrix: ${{ steps.resolve.outputs.matrix }}
     steps:
       - name: Checkout protected-index parser
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
@@ -84,7 +87,7 @@ jobs:
           MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
           LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
           SELECTED_TARGET: ${{ inputs.target }}
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const { parseProtectedGatewayIndex } = require(`${process.env.GITHUB_WORKSPACE}/scripts/parse_protected_gateway_index.cjs`);
@@ -263,7 +266,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout diagnostic classifier
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
@@ -285,7 +288,7 @@ jobs:
           SELECTED_TARGET: ${{ inputs.target }}
           TARGET_INDEX: ${{ matrix.target_index }}
           TARGET_DIGEST: ${{ matrix.target_digest }}
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const { parseProtectedGatewayIndex } = require(`${process.env.GITHUB_WORKSPACE}/scripts/parse_protected_gateway_index.cjs`);
@@ -478,7 +481,7 @@ jobs:
         name: Authenticate to Google Cloud for passive inspection
         if: ${{ inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways }}
         continue-on-error: true
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}
           service_account: ${{ steps.metadata.outputs.gcp_workload_identity_service_account }}
@@ -488,7 +491,7 @@ jobs:
       - id: auth
         name: Authenticate to Google Cloud
         if: ${{ !inputs.inspect_connections && !inputs.inspect_ssh_policy && !inputs.remaining_gateways }}
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}
           service_account: ${{ steps.metadata.outputs.gcp_workload_identity_service_account }}
@@ -496,7 +499,7 @@ jobs:
       - name: Set up gcloud
         if: ${{ !inputs.inspect_connections && !inputs.inspect_ssh_policy && !inputs.remaining_gateways }}
         id: gcloud_setup
-        uses: google-github-actions/setup-gcloud@v3
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
         with:
           project_id: ${{ steps.metadata.outputs.gcp_project_id }}
           version: '>= 416.0.0'
@@ -505,7 +508,7 @@ jobs:
         if: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && steps.auth_filtered.outcome == 'success' }}
         id: gcloud_setup_filtered
         continue-on-error: true
-        uses: google-github-actions/setup-gcloud@v3
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
         with:
           project_id: ${{ steps.metadata.outputs.gcp_project_id }}
           version: '>= 416.0.0'

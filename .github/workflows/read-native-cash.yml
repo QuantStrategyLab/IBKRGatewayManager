@@ -53,13 +53,13 @@ jobs:
       SAVED_EVIDENCE_SHA256: ${{ inputs.saved_evidence_sha256 }}
       RETAIN_SAVED_ON_HOST: ${{ inputs.retain_saved_on_host }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
       - name: Bind the existing protected target and expected account
         id: target
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           TARGETS: ${{ secrets.IB_GATEWAY_TARGETS_JSON }}
           MATCHED_INDEX: ${{ secrets.IB_GATEWAY_MATCHED_INDEX }}
@@ -107,14 +107,14 @@ jobs:
             } catch { core.setFailed('Protected target/account binding unavailable'); }
 
       - name: Authenticate using the existing target identity
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ steps.target.outputs.provider }}
           service_account: ${{ steps.target.outputs.service_account }}
         env:
           NODE_OPTIONS: --require=${{ github.workspace }}/scripts/filter_github_action_auth_logs.cjs
 
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
         env:
           NODE_OPTIONS: --require=${{ github.workspace }}/scripts/filter_github_action_auth_logs.cjs
 
