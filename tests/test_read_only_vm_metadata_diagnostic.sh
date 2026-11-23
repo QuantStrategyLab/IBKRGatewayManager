@@ -21,7 +21,7 @@ grep -Fq 'target_index' "$workflow_file"
 grep -Fq 'target_digest' "$workflow_file"
 grep -Fq 'Resolved gateway target changed between jobs' "$workflow_file"
 grep -Fq 'gcloud compute instances describe' "$workflow_file"
-grep -Fq 'uses: actions/checkout@v6' "$workflow_file"
+grep -Eq 'uses: actions/checkout@([0-9a-f]{40} # v6|v6)' "$workflow_file"
 grep -Fq 'persist-credentials: false' "$workflow_file"
 grep -Fq 'GATEWAY_VM_DIAGNOSTIC_STATUS=VM_RUNNING' "$workflow_file"
 test "$(grep -Fc 'scripts/classify_gcloud_metadata_failure.py' "$workflow_file")" -eq 5

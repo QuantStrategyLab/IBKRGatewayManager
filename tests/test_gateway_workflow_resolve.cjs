@@ -27,7 +27,7 @@ for (const line of metadataBlock.slice(metadataScriptStart + 'script: |'.length)
 }
 const metadataScript = metadataScriptLines.join('\n');
 assert.ok(workflow.includes('  resolve:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n'));
-assert.match(resolveBlock, /uses: actions\/checkout@v6\n\s+with:\n\s+persist-credentials: false/);
+assert.match(resolveBlock, /uses: actions\/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6\n\s+with:\n\s+persist-credentials: false/);
 assert.match(workflow, /remaining_gateway_index:[\s\S]*?required: false[\s\S]*?type: string/);
 assert.match(workflow, /Selected remaining gateway index requires protected passive connection inspection/);
 const ordinarySetup = workflow.slice(workflow.indexOf('- name: Set up gcloud\n'), workflow.indexOf('- name: Set up gcloud for passive inspection\n'));

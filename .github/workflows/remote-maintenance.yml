@@ -20,6 +20,9 @@ on:
           - restart-gateway
           - status
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: false
@@ -32,7 +35,7 @@ jobs:
     steps:
       - name: Resolve gateway targets
         id: resolve
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};
@@ -88,7 +91,7 @@ jobs:
     steps:
       - name: Mask target metadata
         id: metadata
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};
@@ -140,7 +143,7 @@ jobs:
             }
 
       - name: Mask authentication metadata
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const values = [
@@ -153,13 +156,13 @@ jobs:
             }
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}
           service_account: ${{ steps.metadata.outputs.gcp_workload_identity_service_account }}
 
       - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
         with:
           project_id: ${{ steps.metadata.outputs.gcp_project_id }}
           version: '>= 416.0.0'
