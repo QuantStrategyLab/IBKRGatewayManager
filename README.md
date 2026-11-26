@@ -30,7 +30,7 @@ It supports the system but does not decide which strategy should be live. Strate
 
 ## Gateway target configuration
 
-Deployment workflows require the repository-level Actions variable `IB_GATEWAY_TARGETS_JSON`. It is a JSON object keyed by a non-sensitive target label (or a list whose entries include `name`). Every target supplies its own GCP project, Workload Identity provider, service account, VM location, and deployment settings. The repository has no default gateway or cloud account.
+Deployment workflows require the repository-level Actions secret `IB_GATEWAY_TARGETS_JSON`, stored as compact single-line JSON (multiline secrets cause GitHub Actions to register `{` and `}` lines as masks and suppress cross-job matrix outputs). It is a JSON object keyed by a non-sensitive target label (or a list whose entries include `name`). Every target supplies its own GCP project, Workload Identity provider, service account, VM location, and deployment settings. The repository has no default gateway or cloud account.
 
 Setting `maintenance_enabled=false` for a target pauses scheduled redeployment only; it does not disable the Gateway health and 2FA timers already installed on the VM. A scheduled workflow can succeed when every target was skipped, so its result does not verify the Gateway API, login, or account identity. Use the read-only diagnostics and separate account-level evidence; do not enable scheduled redeployment just to obtain a green workflow.
 
