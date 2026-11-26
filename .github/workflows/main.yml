@@ -117,6 +117,8 @@ jobs:
           raw_targets = os.environ.get("TARGETS_JSON", "").strip()
           if not raw_targets:
               raise SystemExit("IB_GATEWAY_TARGETS_JSON is required")
+          if "\n" in raw_targets or "\r" in raw_targets:
+              raise SystemExit("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON")
 
           loaded = json.loads(raw_targets)
           if isinstance(loaded, dict):

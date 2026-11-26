@@ -36,6 +36,10 @@ jobs:
               core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
               return;
             }
+            if (/[\r\n]/.test(raw.trim())) {
+              core.setFailed("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON");
+              return;
+            }
 
             const loaded = JSON.parse(raw);
             const targets = Array.isArray(loaded)
@@ -88,6 +92,10 @@ jobs:
             const raw = ${{ toJSON(secrets.IB_GATEWAY_TARGETS_JSON) }};
             if (!raw || !raw.trim()) {
               core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
+              return;
+            }
+            if (/[\r\n]/.test(raw.trim())) {
+              core.setFailed("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON");
               return;
             }
 

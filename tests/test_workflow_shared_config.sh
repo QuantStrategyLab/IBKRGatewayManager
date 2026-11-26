@@ -66,6 +66,10 @@ missing, _, _ = select("")
 assert missing.returncode != 0
 assert "IB_GATEWAY_TARGETS_JSON is required" in missing.stderr
 
+multiline, _, _ = select('{\n  "gateway-a": {}\n}')
+assert multiline.returncode != 0
+assert "IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON" in multiline.stderr
+
 configured, outputs, summary = select('{"gateway-a": {}}')
 assert configured.returncode == 0, configured.stderr
 assert [target["name"] for target in json.loads(outputs["matrix"])["target"]] == ["gateway-a"]
@@ -359,6 +363,7 @@ do
   grep -Fq 'const target = targets[Number(${{ toJSON(matrix.target_index) }})];' "$resolver_workflow"
   grep -Fq 'target_digest: crypto.createHash("sha256").update(JSON.stringify(target)).digest("hex")' "$resolver_workflow"
   grep -Fq 'if (targetDigest !== ${{ toJSON(matrix.target_digest) }}) {' "$resolver_workflow"
+  grep -Fq 'core.setFailed("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON");' "$resolver_workflow"
   grep -Fq 'core.setFailed("Resolved gateway target changed between jobs")' "$resolver_workflow"
   grep -Fq 'core.setOutput(name.toLowerCase(), value || "");' "$resolver_workflow"
   grep -Fq 'workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}' "$resolver_workflow"
