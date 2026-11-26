@@ -9,8 +9,8 @@ diagnose_workflow_file="$repo_dir/.github/workflows/diagnose.yml"
 grep -Fq 'target:' "$workflow_file"
 grep -Fq 'IB_GATEWAY_TARGETS_JSON' "$workflow_file"
 grep -Fq 'matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}' "$workflow_file"
-grep -Fq 'GCP_PROJECT_ID: ${{ matrix.target.gcp_project_id }}' "$workflow_file"
-grep -Fq 'GCP_SECRET_PROJECT_ID: ${{ matrix.target.gcp_secret_project_id || matrix.target.gcp_project_id }}' "$workflow_file"
+! grep -Fq 'matrix.target.' "$workflow_file"
+grep -Fq 'Resolve gateway target config' "$workflow_file"
 grep -Fq 'gcloud secrets versions access latest --project "${GCP_SECRET_PROJECT_ID}"' "$workflow_file"
 ! grep -Fq 'gcloud secrets versions access latest --project "${GCP_PROJECT_ID}"' "$workflow_file"
 grep -Fq 'IB_GATEWAY_TARGETS_JSON is required' "$workflow_file"
@@ -66,33 +66,43 @@ missing, _, _ = select("")
 assert missing.returncode != 0
 assert "IB_GATEWAY_TARGETS_JSON is required" in missing.stderr
 
+multiline, _, _ = select('{\n  "gateway-a": {}\n}')
+assert multiline.returncode != 0
+assert "IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON" in multiline.stderr
+
 configured, outputs, summary = select('{"gateway-a": {}}')
 assert configured.returncode == 0, configured.stderr
-assert [target["name"] for target in json.loads(outputs["matrix"])["target"]] == ["gateway-a"]
+assert [item["target_index"] for item in json.loads(outputs["matrix"])["include"]] == [0]
 assert outputs["has_targets"] == "true"
 assert "Selected: gateway-a" in summary
+
+list_secret = '[{"name":"gateway-a","gcp_project_id":"mock-project"}]'
+list_configured, list_outputs, _ = select(list_secret, event="workflow_dispatch")
+assert list_configured.returncode == 0, list_configured.stderr
+assert "mock-project" not in list_outputs["matrix"]
+assert "gateway-a" not in list_outputs["matrix"]
 
 targets = '{"active": {}, "parked": {"maintenance_enabled": false}}'
 scheduled, outputs, summary = select(targets)
 assert scheduled.returncode == 0, scheduled.stderr
-assert [target["name"] for target in json.loads(outputs["matrix"])["target"]] == ["active"]
+assert [item["target_index"] for item in json.loads(outputs["matrix"])["include"]] == [0]
 assert outputs["has_targets"] == "true"
 assert "Skipped parked: maintenance_enabled=false; runtime state not verified." in summary
 
 all_parked, outputs, summary = select('{"parked": {"maintenance_enabled": false}}')
 assert all_parked.returncode == 0, all_parked.stderr
-assert json.loads(outputs["matrix"])["target"] == []
+assert json.loads(outputs["matrix"])["include"] == []
 assert outputs["has_targets"] == "false"
 assert "Selected: none" in summary
 
 manual, outputs, summary = select(targets, event="workflow_dispatch", selected_target="parked")
 assert manual.returncode == 0, manual.stderr
-assert [target["name"] for target in json.loads(outputs["matrix"])["target"]] == ["parked"]
+assert [item["target_index"] for item in json.loads(outputs["matrix"])["include"]] == [1]
 assert "Skipped parked" not in summary
 
 manual_all, outputs, _ = select(targets, event="workflow_dispatch")
 assert manual_all.returncode == 0, manual_all.stderr
-assert [target["name"] for target in json.loads(outputs["matrix"])["target"]] == ["active", "parked"]
+assert [item["target_index"] for item in json.loads(outputs["matrix"])["include"]] == [0, 1]
 
 invalid, _, _ = select('{"gateway-a": {"maintenance_enabled": "false"}}')
 assert invalid.returncode != 0
@@ -106,27 +116,65 @@ assert "one explicit target" in restore_all.stderr
 win_targets = '{"us-gw": {}, "fut-gw": {"maintenance_window": "weekend_only"}}'
 est_early, outputs, summary = select(win_targets, schedule_cron="15 0 * * 2-6", schedule_now_utc="2026-12-08T00:15:00Z")
 assert est_early.returncode == 0, est_early.stderr
-assert json.loads(outputs["matrix"])["target"] == []
+assert json.loads(outputs["matrix"])["include"] == []
 assert outputs["has_targets"] == "false"
 assert "Skipped us-gw: outside us_23x5_daily_pause window; runtime state untouched." in summary
 
 est_pause, outputs, _ = select(win_targets, schedule_cron="15 1 * * 2-6", schedule_now_utc="2026-12-08T01:15:00Z")
 assert est_pause.returncode == 0, est_pause.stderr
-assert [t["name"] for t in json.loads(outputs["matrix"])["target"]] == ["us-gw"]
+assert [t["target_index"] for t in json.loads(outputs["matrix"])["include"]] == [0]
 
 # Summer EDT: 00:15 UTC = 20:15 EDT (selected); 01:15 UTC = 21:15 EDT (outside pause -> skipped)
 edt_pause, outputs, _ = select(win_targets, schedule_cron="15 0 * * 2-6", schedule_now_utc="2026-07-08T00:15:00Z")
 assert edt_pause.returncode == 0, edt_pause.stderr
-assert [t["name"] for t in json.loads(outputs["matrix"])["target"]] == ["us-gw"]
+assert [t["target_index"] for t in json.loads(outputs["matrix"])["include"]] == [0]
 
 edt_late, outputs, _ = select(win_targets, schedule_cron="15 1 * * 2-6", schedule_now_utc="2026-07-08T01:15:00Z")
 assert edt_late.returncode == 0, edt_late.stderr
-assert json.loads(outputs["matrix"])["target"] == []
+assert json.loads(outputs["matrix"])["include"] == []
 
 # Saturday 14:15 UTC = 09:15 EST -> weekend_only selected, us_23x5_daily_pause skipped
 sat_maint, outputs, _ = select(win_targets, schedule_cron="15 14 * * 6", schedule_now_utc="2026-12-12T14:15:00Z")
 assert sat_maint.returncode == 0, sat_maint.stderr
-assert [t["name"] for t in json.loads(outputs["matrix"])["target"]] == ["fut-gw"]
+assert [t["target_index"] for t in json.loads(outputs["matrix"])["include"]] == [1]
+
+# Verify deploy Resolve gateway target config writes GITHUB_ENV and rejects digest mismatch
+resolve_step = workflow.split("      - name: Resolve gateway target config\n", 1)[1].split("          PY\n", 1)[0]
+resolve_code = "\n".join(line.removeprefix("          ") for line in resolve_step.split(start, 1)[1].splitlines())
+entry = json.loads(list_outputs["matrix"])["include"][0]
+with tempfile.TemporaryDirectory() as temp_dir:
+    env_out = Path(temp_dir) / "env_out"
+    res_ok = subprocess.run(
+        [sys.executable, "-c", resolve_code],
+        env=os.environ | {
+            "TARGETS_JSON": list_secret,
+            "TARGET_INDEX": str(entry["target_index"]),
+            "TARGET_DIGEST": entry["target_digest"],
+            "GITHUB_ENV": str(env_out),
+        },
+        text=True,
+        capture_output=True,
+    )
+    assert res_ok.returncode == 0, res_ok.stderr
+    env_map = dict(line.split("=", 1) for line in env_out.read_text().splitlines())
+    assert env_map["TARGET_NAME"] == "gateway-a"
+    assert env_map["GCP_PROJECT_ID"] == "mock-project"
+    assert env_map["GCP_SECRET_PROJECT_ID"] == "mock-project"
+    assert "::add-mask::mock-project" in res_ok.stdout
+
+    res_bad = subprocess.run(
+        [sys.executable, "-c", resolve_code],
+        env=os.environ | {
+            "TARGETS_JSON": list_secret,
+            "TARGET_INDEX": str(entry["target_index"]),
+            "TARGET_DIGEST": "0" * 64,
+            "GITHUB_ENV": str(env_out),
+        },
+        text=True,
+        capture_output=True,
+    )
+    assert res_bad.returncode != 0
+    assert "Resolved gateway target changed between jobs" in res_bad.stderr
 PY
 grep -Fq 'id-token: write' "$workflow_file"
 grep -Fq 'timeout-minutes: 75' "$workflow_file"
@@ -352,13 +400,14 @@ for resolver_workflow in "$repo_dir/.github/workflows/diagnose.yml" \
   "$repo_dir/.github/workflows/capture-screen.yml" \
   "$repo_dir/.github/workflows/remote-maintenance.yml"
 do
-  grep -Fq 'const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};' "$resolver_workflow"
+  grep -Fq 'const raw = ${{ toJSON(secrets.IB_GATEWAY_TARGETS_JSON) }};' "$resolver_workflow"
   grep -Fq 'return digits.length >= 4 ? `U***${digits.slice(-4)}` : "<target>";' "$resolver_workflow"
   grep -Fq 'if (value) core.setSecret(String(value));' "$resolver_workflow"
   grep -Fq 'core.setOutput("matrix", JSON.stringify({include: matrixTargets}));' "$resolver_workflow"
   grep -Fq 'const target = targets[Number(${{ toJSON(matrix.target_index) }})];' "$resolver_workflow"
   grep -Fq 'target_digest: crypto.createHash("sha256").update(JSON.stringify(target)).digest("hex")' "$resolver_workflow"
   grep -Fq 'if (targetDigest !== ${{ toJSON(matrix.target_digest) }}) {' "$resolver_workflow"
+  grep -Fq 'core.setFailed("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON");' "$resolver_workflow"
   grep -Fq 'core.setFailed("Resolved gateway target changed between jobs")' "$resolver_workflow"
   grep -Fq 'core.setOutput(name.toLowerCase(), value || "");' "$resolver_workflow"
   grep -Fq 'workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}' "$resolver_workflow"

@@ -71,7 +71,7 @@ jobs:
       matrix: ${{ steps.targets.outputs.matrix }}
       has_targets: ${{ steps.targets.outputs.has_targets }}
     env:
-      TARGETS_JSON: ${{ vars.IB_GATEWAY_TARGETS_JSON }}
+      TARGETS_JSON: ${{ secrets.IB_GATEWAY_TARGETS_JSON }}
       SELECTED_TARGET: ${{ github.event.inputs.target }}
       SELECTED_DEPLOY_MODE: ${{ github.event.inputs.deploy_mode }}
       EVENT_SCHEDULE_CRON: ${{ github.event.schedule }}
@@ -117,6 +117,8 @@ jobs:
           raw_targets = os.environ.get("TARGETS_JSON", "").strip()
           if not raw_targets:
               raise SystemExit("IB_GATEWAY_TARGETS_JSON is required")
+          if "\n" in raw_targets or "\r" in raw_targets:
+              raise SystemExit("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON")
 
           loaded = json.loads(raw_targets)
           if isinstance(loaded, dict):
@@ -159,11 +161,14 @@ jobs:
                   "A full or restore-env gateway operation requires one explicit target; "
                   "use keepalive for all-target maintenance."
               )
+          import hashlib
+
           skipped = []
           window_skipped = []
+          indexed_normalized = list(enumerate(normalized))
           if selected_name == "all":
               if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
-                  enabled_targets = [target for target in normalized if target.get("maintenance_enabled", True)]
+                  enabled_targets = [(idx, target) for idx, target in indexed_normalized if target.get("maintenance_enabled", True)]
                   skipped = [target for target in normalized if not target.get("maintenance_enabled", True)]
                   enforce_window = bool(
                       os.environ.get("EVENT_SCHEDULE_CRON", "").strip()
@@ -171,26 +176,36 @@ jobs:
                   )
                   if enforce_window:
                       now_et = resolve_now_utc().astimezone(ET)
-                      selected = []
-                      for target in enabled_targets:
+                      selected_with_index = []
+                      for idx, target in enabled_targets:
                           w_name = target.get("maintenance_window", "us_23x5_daily_pause")
                           if window_allows_now(w_name, now_et):
-                              selected.append(target)
+                              selected_with_index.append((idx, target))
                           else:
                               window_skipped.append((target["name"], w_name, now_et.strftime("%Y-%m-%d %H:%M %Z")))
                   else:
-                      selected = enabled_targets
+                      selected_with_index = enabled_targets
               else:
-                  selected = normalized
+                  selected_with_index = indexed_normalized
           else:
-              selected = [target for target in normalized if target["name"] == selected_name]
-              if not selected:
+              selected_with_index = [(idx, target) for idx, target in indexed_normalized if target["name"] == selected_name]
+              if not selected_with_index:
                   known = ", ".join(target["name"] for target in normalized)
                   raise SystemExit(f"Unknown gateway target {selected_name!r}. Known targets: {known}")
 
+          selected = [target for _, target in selected_with_index]
+          matrix_entries = [
+              {
+                  "target_index": idx,
+                  "target_digest": hashlib.sha256(
+                      json.dumps(target, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                  ).hexdigest(),
+              }
+              for idx, target in selected_with_index
+          ]
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write("matrix=" + json.dumps({"target": selected}, separators=(",", ":")) + "\n")
-              output.write("has_targets=" + str(bool(selected)).lower() + "\n")
+              output.write("matrix=" + json.dumps({"include": matrix_entries}, separators=(",", ":")) + "\n")
+              output.write("has_targets=" + str(bool(matrix_entries)).lower() + "\n")
           selected_names = ", ".join(target["name"] for target in selected) or "none"
           print("Selected targets: " + selected_names)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
@@ -212,7 +227,7 @@ jobs:
   deploy:
     needs: select-targets
     if: ${{ needs.select-targets.outputs.has_targets == 'true' }}
-    name: deploy (${{ matrix.target.name }})
+    name: deploy (target-${{ matrix.target_index }})
     runs-on: ubuntu-latest
     # A progressing IB Gateway login may legitimately consume the bounded
     # readiness budget (up to 61 minutes).  Keep enough runner time for its
@@ -223,48 +238,14 @@ jobs:
       max-parallel: 1
       matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}
     concurrency:
-      group: ibkr-gateway-${{ matrix.target.name }}
+      group: ibkr-gateway-target-${{ matrix.target_index }}
       cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
     env:
-      TARGET_NAME: ${{ matrix.target.name }}
       DEPLOY_EVENT_NAME: ${{ github.event_name }}
-      MAINTENANCE_WINDOW: ${{ matrix.target.maintenance_window }}
       EVENT_SCHEDULE_CRON: ${{ github.event.schedule }}
-      GCP_PROJECT_ID: ${{ matrix.target.gcp_project_id }}
-      GCP_SECRET_PROJECT_ID: ${{ matrix.target.gcp_secret_project_id || matrix.target.gcp_project_id }}
-      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ matrix.target.gcp_workload_identity_provider }}
-      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ matrix.target.gcp_workload_identity_service_account }}
-      GCE_USER: ${{ matrix.target.gce_user }}
-      GCE_INSTANCE_NAME: ${{ matrix.target.gce_instance_name }}
-      GCE_ZONE: ${{ matrix.target.gce_zone }}
-      DEPLOY_PATH: ${{ matrix.target.deploy_path }}
-      IB_GATEWAY_MODE: ${{ matrix.target.mode }}
-      IB_GATEWAY_BASE_VERSION: ${{ matrix.target.ib_gateway_base_version }}
-      IB_GATEWAY_CONTAINER_NAME: ${{ matrix.target.container_name }}
-      IB_GATEWAY_COMPOSE_PROJECT_NAME: ${{ matrix.target.compose_project_name }}
-      IB_GATEWAY_COMPOSE_SERVICE_NAME: ${{ matrix.target.compose_service_name }}
-      IB_GATEWAY_UNIT_SUFFIX: ${{ matrix.target.unit_suffix }}
-      IB_GATEWAY_LIVE_HOST_PORT: ${{ matrix.target.live_host_port }}
-      IB_GATEWAY_PAPER_HOST_PORT: ${{ matrix.target.paper_host_port }}
-      IB_GATEWAY_VNC_HOST_ADDRESS: ${{ matrix.target.vnc_host_address }}
-      IB_GATEWAY_VNC_HOST_PORT: ${{ matrix.target.vnc_host_port }}
-      CLOUD_RUN_EGRESS_CIDR: ${{ matrix.target.cloud_run_egress_cidr }}
-      ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY: ${{ matrix.target.allow_connections_from_localhost_only }}
-      TWS_ACCEPT_INCOMING: ${{ matrix.target.tws_accept_incoming }}
-      READ_ONLY_API: ${{ matrix.target.read_only_api }}
-      TWOFA_DEVICE: ${{ matrix.target.twofa_device }}
-      IBKR_2FA_AUTOFILL: ${{ matrix.target.ibkr_2fa_autofill }}
-      IBKR_2FA_MAX_SUBMISSIONS: ${{ matrix.target.ibkr_2fa_max_submissions }}
-      IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW: ${{ matrix.target.ibkr_2fa_max_submissions_per_window }}
-      IBKR_2FA_SUBMISSION_RESET_SECONDS: ${{ matrix.target.ibkr_2fa_submission_reset_seconds }}
-      SSH_PRIVATE_KEY_SECRET_NAME: ${{ matrix.target.ssh_private_key_secret_name }}
-      TWS_USERID_SECRET_NAME: ${{ matrix.target.tws_userid_secret_name }}
-      TWS_PASSWORD_SECRET_NAME: ${{ matrix.target.tws_password_secret_name }}
-      TOTP_SECRET_SECRET_NAME: ${{ matrix.target.totp_secret_secret_name }}
-      VNC_SERVER_PASSWORD_SECRET_NAME: ${{ matrix.target.vnc_server_password_secret_name }}
       WORKFLOW_DISPATCH_MODE: ${{ github.event.inputs.deploy_mode }}
       WORKFLOW_DISPATCH_TARGET: ${{ github.event.inputs.target }}
       WORKFLOW_DISPATCH_ALLOW_VM_RESET: ${{ github.event.inputs.allow_vm_reset }}
@@ -273,6 +254,125 @@ jobs:
       WORKFLOW_DISPATCH_EXPECTED_SHA: ${{ github.event.inputs.expected_sha }}
       WORKFLOW_DISPATCH_ALLOW_SECRET_VERSION_CLEANUP: ${{ github.event.inputs.allow_secret_version_cleanup }}
     steps:
+      - name: Resolve gateway target config
+        id: resolve-target
+        env:
+          TARGETS_JSON: ${{ secrets.IB_GATEWAY_TARGETS_JSON }}
+          TARGET_INDEX: ${{ matrix.target_index }}
+          TARGET_DIGEST: ${{ matrix.target_digest }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+
+          raw_targets = os.environ.get("TARGETS_JSON", "").strip()
+          if not raw_targets:
+              raise SystemExit("IB_GATEWAY_TARGETS_JSON is required")
+          if "\n" in raw_targets or "\r" in raw_targets:
+              raise SystemExit("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON")
+
+          loaded = json.loads(raw_targets)
+          if isinstance(loaded, dict):
+              targets = []
+              for name, config in loaded.items():
+                  if not isinstance(config, dict):
+                      raise SystemExit(f"Target {name} must be an object")
+                  target = dict(config)
+                  target.setdefault("name", name)
+                  targets.append(target)
+          elif isinstance(loaded, list):
+              targets = loaded
+          else:
+              raise SystemExit("IB_GATEWAY_TARGETS_JSON must be an object or a list")
+
+          index = int(os.environ["TARGET_INDEX"])
+          if index < 0 or index >= len(targets):
+              raise SystemExit("Resolved gateway target index out of range")
+          target = targets[index]
+          if not isinstance(target, dict) or not target.get("name"):
+              raise SystemExit("Resolved gateway target is invalid")
+
+          digest = hashlib.sha256(
+              json.dumps(target, sort_keys=True, separators=(",", ":")).encode("utf-8")
+          ).hexdigest()
+          if digest != os.environ.get("TARGET_DIGEST", ""):
+              raise SystemExit("Resolved gateway target changed between jobs")
+
+          def _env_str(val: object) -> str:
+              if val is None:
+                  return ""
+              if isinstance(val, bool):
+                  return "true" if val else "false"
+              text = str(val)
+              if "\n" in text or "\r" in text:
+                  raise SystemExit("Gateway target field contains invalid newline")
+              return text
+
+          secret_project_id = target.get("gcp_secret_project_id") or target.get("gcp_project_id")
+          env_pairs = {
+              "TARGET_NAME": _env_str(target.get("name")),
+              "MAINTENANCE_WINDOW": _env_str(target.get("maintenance_window", "")),
+              "GCP_PROJECT_ID": _env_str(target.get("gcp_project_id")),
+              "GCP_SECRET_PROJECT_ID": _env_str(secret_project_id),
+              "GCP_WORKLOAD_IDENTITY_PROVIDER": _env_str(target.get("gcp_workload_identity_provider")),
+              "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT": _env_str(target.get("gcp_workload_identity_service_account")),
+              "GCE_USER": _env_str(target.get("gce_user")),
+              "GCE_INSTANCE_NAME": _env_str(target.get("gce_instance_name")),
+              "GCE_ZONE": _env_str(target.get("gce_zone")),
+              "DEPLOY_PATH": _env_str(target.get("deploy_path")),
+              "IB_GATEWAY_MODE": _env_str(target.get("mode")),
+              "IB_GATEWAY_BASE_VERSION": _env_str(target.get("ib_gateway_base_version")),
+              "IB_GATEWAY_CONTAINER_NAME": _env_str(target.get("container_name")),
+              "IB_GATEWAY_COMPOSE_PROJECT_NAME": _env_str(target.get("compose_project_name")),
+              "IB_GATEWAY_COMPOSE_SERVICE_NAME": _env_str(target.get("compose_service_name")),
+              "IB_GATEWAY_UNIT_SUFFIX": _env_str(target.get("unit_suffix")),
+              "IB_GATEWAY_LIVE_HOST_PORT": _env_str(target.get("live_host_port")),
+              "IB_GATEWAY_PAPER_HOST_PORT": _env_str(target.get("paper_host_port")),
+              "IB_GATEWAY_VNC_HOST_ADDRESS": _env_str(target.get("vnc_host_address")),
+              "IB_GATEWAY_VNC_HOST_PORT": _env_str(target.get("vnc_host_port")),
+              "CLOUD_RUN_EGRESS_CIDR": _env_str(target.get("cloud_run_egress_cidr")),
+              "ALLOW_CONNECTIONS_FROM_LOCALHOST_ONLY": _env_str(target.get("allow_connections_from_localhost_only")),
+              "TWS_ACCEPT_INCOMING": _env_str(target.get("tws_accept_incoming")),
+              "READ_ONLY_API": _env_str(target.get("read_only_api")),
+              "TWOFA_DEVICE": _env_str(target.get("twofa_device")),
+              "IBKR_2FA_AUTOFILL": _env_str(target.get("ibkr_2fa_autofill")),
+              "IBKR_2FA_MAX_SUBMISSIONS": _env_str(target.get("ibkr_2fa_max_submissions")),
+              "IBKR_2FA_MAX_SUBMISSIONS_PER_WINDOW": _env_str(target.get("ibkr_2fa_max_submissions_per_window")),
+              "IBKR_2FA_SUBMISSION_RESET_SECONDS": _env_str(target.get("ibkr_2fa_submission_reset_seconds")),
+              "SSH_PRIVATE_KEY_SECRET_NAME": _env_str(target.get("ssh_private_key_secret_name")),
+              "TWS_USERID_SECRET_NAME": _env_str(target.get("tws_userid_secret_name")),
+              "TWS_PASSWORD_SECRET_NAME": _env_str(target.get("tws_password_secret_name")),
+              "TOTP_SECRET_SECRET_NAME": _env_str(target.get("totp_secret_secret_name")),
+              "VNC_SERVER_PASSWORD_SECRET_NAME": _env_str(target.get("vnc_server_password_secret_name")),
+          }
+
+          sensitive_keys = {
+              "GCP_PROJECT_ID",
+              "GCP_SECRET_PROJECT_ID",
+              "GCP_WORKLOAD_IDENTITY_PROVIDER",
+              "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT",
+              "GCE_USER",
+              "GCE_INSTANCE_NAME",
+              "CLOUD_RUN_EGRESS_CIDR",
+              "DEPLOY_PATH",
+              "SSH_PRIVATE_KEY_SECRET_NAME",
+              "TWS_USERID_SECRET_NAME",
+              "TWS_PASSWORD_SECRET_NAME",
+              "TOTP_SECRET_SECRET_NAME",
+              "VNC_SERVER_PASSWORD_SECRET_NAME",
+          }
+          for key in sensitive_keys:
+              if env_pairs[key]:
+                  print(f"::add-mask::{env_pairs[key]}")
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              for key, value in env_pairs.items():
+                  env_file.write(f"{key}={value}\n")
+          PY
+
       - name: Checkout code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 

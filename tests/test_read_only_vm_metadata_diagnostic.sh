@@ -45,7 +45,7 @@ done
 
 grep -Fq 'GCP_PROJECT_ID: ${{ steps.metadata.outputs.gcp_project_id }}' "$workflow_file"
 grep -Fq "MATCH_TARGETS_JSON: \${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}" "$workflow_file"
-grep -Fq "LEGACY_TARGETS_JSON: \${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}" "$workflow_file"
+grep -Fq "LEGACY_TARGETS_JSON: \${{ !inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}" "$workflow_file"
 grep -Fq "IB_GATEWAY_EXPECTED_HOST: \${{ inputs.match_current_gateway && !inputs.remaining_gateways && secrets.IB_GATEWAY_EXPECTED_HOST || '' }}" "$workflow_file"
 grep -Fq 'fail-fast: ${{ !inputs.remaining_gateways }}' "$workflow_file"
 grep -Fq 'max-parallel: ${{ inputs.remaining_gateways && 3 || 1 }}' "$workflow_file"
