@@ -85,7 +85,7 @@ jobs:
           EXPECTED_RESOURCE_SHA256: ${{ inputs.expected_resource_sha256 }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
           MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
-          LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
+          LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
           SELECTED_TARGET: ${{ inputs.target }}
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
@@ -284,7 +284,7 @@ jobs:
           EXPECTED_RESOURCE_SHA256: ${{ inputs.expected_resource_sha256 }}
           MATCH_TARGETS_JSON: ${{ inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
           MATCHED_INDEX: ${{ (inputs.inspect_connections || inputs.inspect_ssh_policy || inputs.remaining_gateways) && secrets.IB_GATEWAY_MATCHED_INDEX || '' }}
-          LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && vars.IB_GATEWAY_TARGETS_JSON || '' }}
+          LEGACY_TARGETS_JSON: ${{ !inputs.match_current_gateway && secrets.IB_GATEWAY_TARGETS_JSON || '' }}
           SELECTED_TARGET: ${{ inputs.target }}
           TARGET_INDEX: ${{ matrix.target_index }}
           TARGET_DIGEST: ${{ matrix.target_digest }}

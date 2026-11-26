@@ -31,9 +31,13 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
-            const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};
+            const raw = ${{ toJSON(secrets.IB_GATEWAY_TARGETS_JSON) }};
             if (!raw || !raw.trim()) {
               core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
+              return;
+            }
+            if (/[\r\n]/.test(raw.trim())) {
+              core.setFailed("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON");
               return;
             }
 
@@ -85,9 +89,13 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
-            const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};
+            const raw = ${{ toJSON(secrets.IB_GATEWAY_TARGETS_JSON) }};
             if (!raw || !raw.trim()) {
               core.setFailed("IB_GATEWAY_TARGETS_JSON is required");
+              return;
+            }
+            if (/[\r\n]/.test(raw.trim())) {
+              core.setFailed("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON");
               return;
             }
 

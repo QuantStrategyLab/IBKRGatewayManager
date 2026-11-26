@@ -71,7 +71,7 @@ jobs:
       matrix: ${{ steps.targets.outputs.matrix }}
       has_targets: ${{ steps.targets.outputs.has_targets }}
     env:
-      TARGETS_JSON: ${{ vars.IB_GATEWAY_TARGETS_JSON }}
+      TARGETS_JSON: ${{ secrets.IB_GATEWAY_TARGETS_JSON }}
       SELECTED_TARGET: ${{ github.event.inputs.target }}
       SELECTED_DEPLOY_MODE: ${{ github.event.inputs.deploy_mode }}
       EVENT_SCHEDULE_CRON: ${{ github.event.schedule }}
@@ -117,6 +117,8 @@ jobs:
           raw_targets = os.environ.get("TARGETS_JSON", "").strip()
           if not raw_targets:
               raise SystemExit("IB_GATEWAY_TARGETS_JSON is required")
+          if "\n" in raw_targets or "\r" in raw_targets:
+              raise SystemExit("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON")
 
           loaded = json.loads(raw_targets)
           if isinstance(loaded, dict):

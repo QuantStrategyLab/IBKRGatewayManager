@@ -66,6 +66,10 @@ missing, _, _ = select("")
 assert missing.returncode != 0
 assert "IB_GATEWAY_TARGETS_JSON is required" in missing.stderr
 
+multiline, _, _ = select('{\n  "gateway-a": {}\n}')
+assert multiline.returncode != 0
+assert "IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON" in multiline.stderr
+
 configured, outputs, summary = select('{"gateway-a": {}}')
 assert configured.returncode == 0, configured.stderr
 assert [target["name"] for target in json.loads(outputs["matrix"])["target"]] == ["gateway-a"]
@@ -352,13 +356,14 @@ for resolver_workflow in "$repo_dir/.github/workflows/diagnose.yml" \
   "$repo_dir/.github/workflows/capture-screen.yml" \
   "$repo_dir/.github/workflows/remote-maintenance.yml"
 do
-  grep -Fq 'const raw = ${{ toJSON(vars.IB_GATEWAY_TARGETS_JSON) }};' "$resolver_workflow"
+  grep -Fq 'const raw = ${{ toJSON(secrets.IB_GATEWAY_TARGETS_JSON) }};' "$resolver_workflow"
   grep -Fq 'return digits.length >= 4 ? `U***${digits.slice(-4)}` : "<target>";' "$resolver_workflow"
   grep -Fq 'if (value) core.setSecret(String(value));' "$resolver_workflow"
   grep -Fq 'core.setOutput("matrix", JSON.stringify({include: matrixTargets}));' "$resolver_workflow"
   grep -Fq 'const target = targets[Number(${{ toJSON(matrix.target_index) }})];' "$resolver_workflow"
   grep -Fq 'target_digest: crypto.createHash("sha256").update(JSON.stringify(target)).digest("hex")' "$resolver_workflow"
   grep -Fq 'if (targetDigest !== ${{ toJSON(matrix.target_digest) }}) {' "$resolver_workflow"
+  grep -Fq 'core.setFailed("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON");' "$resolver_workflow"
   grep -Fq 'core.setFailed("Resolved gateway target changed between jobs")' "$resolver_workflow"
   grep -Fq 'core.setOutput(name.toLowerCase(), value || "");' "$resolver_workflow"
   grep -Fq 'workload_identity_provider: ${{ steps.metadata.outputs.gcp_workload_identity_provider }}' "$resolver_workflow"
