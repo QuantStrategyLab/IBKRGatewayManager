@@ -37,6 +37,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_gateway_readonly_api.py'
           python3 -m unittest discover -s tests -p 'test_native_cash_read.py'
           python3 -m unittest discover -s tests -p 'test_pilot_runtime_preflight.py'
+          python3 -m unittest discover -s tests -p 'test_paper_targets_json.py'
 
   docker-build:
     runs-on: ubuntu-latest
