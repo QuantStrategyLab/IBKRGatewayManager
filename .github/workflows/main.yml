@@ -72,6 +72,7 @@ jobs:
       has_targets: ${{ steps.targets.outputs.has_targets }}
     env:
       TARGETS_JSON: ${{ secrets.IB_GATEWAY_TARGETS_JSON }}
+      PAPER_TARGETS_JSON: ${{ secrets.IB_GATEWAY_PAPER_TARGETS_JSON }}
       SELECTED_TARGET: ${{ github.event.inputs.target }}
       SELECTED_DEPLOY_MODE: ${{ github.event.inputs.deploy_mode }}
       EVENT_SCHEDULE_CRON: ${{ github.event.schedule }}
@@ -114,25 +115,38 @@ jobs:
                   return parsed.replace(tzinfo=timezone.utc)
               return parsed.astimezone(timezone.utc)
 
-          raw_targets = os.environ.get("TARGETS_JSON", "").strip()
-          if not raw_targets:
-              raise SystemExit("IB_GATEWAY_TARGETS_JSON is required")
-          if "\n" in raw_targets or "\r" in raw_targets:
-              raise SystemExit("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON")
+          def _parse_targets_blob(raw_value: str, secret_label: str, *, require_paper: bool = False) -> list[dict]:
+              text = raw_value.strip()
+              if not text:
+                  if not require_paper:
+                      raise SystemExit("IB_GATEWAY_TARGETS_JSON is required")
+                  return []
+              if "\n" in text or "\r" in text:
+                  raise SystemExit(f"{secret_label} must be stored as single-line JSON")
+              loaded_blob = json.loads(text)
+              if isinstance(loaded_blob, dict):
+                  parsed = []
+                  for name, config in loaded_blob.items():
+                      if not isinstance(config, dict):
+                          raise SystemExit(f"Target {name} must be an object")
+                      item = dict(config)
+                      item.setdefault("name", name)
+                      parsed.append(item)
+              elif isinstance(loaded_blob, list):
+                  parsed = loaded_blob
+              else:
+                  raise SystemExit(f"{secret_label} must be an object or a list")
+              if require_paper:
+                  for item in parsed:
+                      if not isinstance(item, dict) or item.get("mode") != "paper":
+                          raise SystemExit(f"{secret_label} entries must set mode='paper'")
+              return parsed
 
-          loaded = json.loads(raw_targets)
-          if isinstance(loaded, dict):
-              targets = []
-              for name, config in loaded.items():
-                  if not isinstance(config, dict):
-                      raise SystemExit(f"Target {name} must be an object")
-                  target = dict(config)
-                  target.setdefault("name", name)
-                  targets.append(target)
-          elif isinstance(loaded, list):
-              targets = loaded
-          else:
-              raise SystemExit("IB_GATEWAY_TARGETS_JSON must be an object or a list")
+          targets = _parse_targets_blob(os.environ.get("TARGETS_JSON", ""), "IB_GATEWAY_TARGETS_JSON") + _parse_targets_blob(
+              os.environ.get("PAPER_TARGETS_JSON", ""),
+              "IB_GATEWAY_PAPER_TARGETS_JSON",
+              require_paper=True,
+          )
 
           normalized = []
           seen = set()
@@ -258,6 +272,7 @@ jobs:
         id: resolve-target
         env:
           TARGETS_JSON: ${{ secrets.IB_GATEWAY_TARGETS_JSON }}
+          PAPER_TARGETS_JSON: ${{ secrets.IB_GATEWAY_PAPER_TARGETS_JSON }}
           TARGET_INDEX: ${{ matrix.target_index }}
           TARGET_DIGEST: ${{ matrix.target_digest }}
         run: |
@@ -268,25 +283,38 @@ jobs:
           import json
           import os
 
-          raw_targets = os.environ.get("TARGETS_JSON", "").strip()
-          if not raw_targets:
-              raise SystemExit("IB_GATEWAY_TARGETS_JSON is required")
-          if "\n" in raw_targets or "\r" in raw_targets:
-              raise SystemExit("IB_GATEWAY_TARGETS_JSON must be stored as single-line JSON")
+          def _parse_targets_blob(raw_value: str, secret_label: str, *, require_paper: bool = False) -> list[dict]:
+              text = raw_value.strip()
+              if not text:
+                  if not require_paper:
+                      raise SystemExit("IB_GATEWAY_TARGETS_JSON is required")
+                  return []
+              if "\n" in text or "\r" in text:
+                  raise SystemExit(f"{secret_label} must be stored as single-line JSON")
+              loaded_blob = json.loads(text)
+              if isinstance(loaded_blob, dict):
+                  parsed = []
+                  for name, config in loaded_blob.items():
+                      if not isinstance(config, dict):
+                          raise SystemExit(f"Target {name} must be an object")
+                      item = dict(config)
+                      item.setdefault("name", name)
+                      parsed.append(item)
+              elif isinstance(loaded_blob, list):
+                  parsed = loaded_blob
+              else:
+                  raise SystemExit(f"{secret_label} must be an object or a list")
+              if require_paper:
+                  for item in parsed:
+                      if not isinstance(item, dict) or item.get("mode") != "paper":
+                          raise SystemExit(f"{secret_label} entries must set mode='paper'")
+              return parsed
 
-          loaded = json.loads(raw_targets)
-          if isinstance(loaded, dict):
-              targets = []
-              for name, config in loaded.items():
-                  if not isinstance(config, dict):
-                      raise SystemExit(f"Target {name} must be an object")
-                  target = dict(config)
-                  target.setdefault("name", name)
-                  targets.append(target)
-          elif isinstance(loaded, list):
-              targets = loaded
-          else:
-              raise SystemExit("IB_GATEWAY_TARGETS_JSON must be an object or a list")
+          targets = _parse_targets_blob(os.environ.get("TARGETS_JSON", ""), "IB_GATEWAY_TARGETS_JSON") + _parse_targets_blob(
+              os.environ.get("PAPER_TARGETS_JSON", ""),
+              "IB_GATEWAY_PAPER_TARGETS_JSON",
+              require_paper=True,
+          )
 
           index = int(os.environ["TARGET_INDEX"])
           if index < 0 or index >= len(targets):
